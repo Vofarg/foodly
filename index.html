@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Foodly!</title>
+  <meta name="description" content="Foodly! — рецепты с КБЖУ, список покупок, план питания на неделю и экспорт списка в PDF.">
+  <meta name="theme-color" content="#f7f8fa">
+  <meta name="color-scheme" content="light dark">
+  <!-- Тема применяется до первой отрисовки — без вспышки -->
+  <script>
+    (function () {
+      var t = null;
+      try { t = JSON.parse(localStorage.getItem('foodly:v1:theme')); } catch (e) {}
+      if (t !== 'dark' && t !== 'light') t = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', t);
+      var m = document.querySelector('meta[name="theme-color"]');
+      if (m) m.setAttribute('content', t === 'dark' ? '#1a1a1d' : '#f7f8fa');
+    })();
+  </script>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Foodly!">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Перейти к содержимому</a>
+  <div id="app-shell">
+    <header class="app-header">
+      <div class="header-inner">
+        <a class="logo" href="#recipes" aria-label="Foodly! — на главную">
+          <span class="logo-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" width="32" height="32"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3ecf8e"/><stop offset="1" stop-color="#a78bfa"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#lg)"/><path d="M8 15.5h16a8 8 0 0 1-16 0Z" fill="#fff"/><path d="M13 12.5c0-2 1.5-2.5 1.5-4.5M18 12.5c0-2 1.5-2.5 1.5-4.5" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
+          </span>
+          <span class="logo-text">Foodly<span class="logo-bang">!</span></span>
+        </a>
+        <nav class="main-nav" aria-label="Разделы">
+          <a class="nav-link" href="#recipes" data-route="recipes"><span class="nav-ico" aria-hidden="true">📖</span><span class="nav-label">Рецепты</span></a>
+          <a class="nav-link" href="#shopping" data-route="shopping"><span class="nav-ico" aria-hidden="true">🛒</span><span class="nav-label">Покупки</span><span class="nav-count" hidden></span></a>
+          <a class="nav-link" href="#plan" data-route="plan"><span class="nav-ico" aria-hidden="true">🗓️</span><span class="nav-label">Меню</span></a>
+          <a class="nav-link" href="#settings" data-route="settings"><span class="nav-ico" aria-hidden="true">⚙️</span><span class="nav-label">Настройки</span></a>
+        </nav>
+        <button type="button" class="theme-toggle" role="switch" aria-checked="false" aria-label="Тёмная тема" data-theme-toggle title="Сменить тему">
+          <svg class="ico-sun" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></g></svg>
+          <svg class="ico-moon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" fill="currentColor"/></svg>
+        </button>
+      </div>
+    </header>
+    <main id="main" class="app-main" tabindex="-1">
+      <noscript><p class="notice">Для работы Foodly! нужен включённый JavaScript.</p></noscript>
+    </main>
+  </div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

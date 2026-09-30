@@ -1,0 +1,23 @@
+{
+  "name": "Foodly! — рецепты и покупки",
+  "short_name": "Foodly!",
+  "description": "Рецепты с КБЖУ, список покупок, план питания на неделю и экспорт списка в PDF.",
+  "lang": "ru",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f7f8fa",
+  "theme_color": "#3ecf8e",
+  "categories": ["food", "health", "lifestyle"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Список покупок", "url": "./#shopping" },
+    { "name": "План питания", "url": "./#plan" }
+  ]
+}
