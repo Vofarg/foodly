@@ -1753,6 +1753,17 @@
       stack.forEach(function (m, i) { if (i < stack.length - 1) m.overlay.setAttribute('inert', ''); else m.overlay.removeAttribute('inert'); });
       document.body.classList.toggle('modal-open', stack.length > 0);
     }
+    /* Esc и Tab обрабатываем на уровне документа: работает, даже если фокус «выпал» из окна */
+    document.addEventListener('keydown', function (e) {
+      var top = stack[stack.length - 1];
+      if (!top || !top.onKey) return;
+      if (e.key === 'Tab' && !top.overlay.contains(document.activeElement)) {
+        e.preventDefault();
+        var f = focusables(top.overlay); if (f.length) (e.shiftKey ? f[f.length - 1] : f[0]).focus();
+        return;
+      }
+      top.onKey(e);
+    });
     function modal(opts) {
       var titleId = nextId('modal-title');
       var overlay = h('<div class="modal-overlay"><div class="modal modal-' + (opts.size || 'md') + '" role="dialog" aria-modal="true" aria-labelledby="' + titleId + '">' +
@@ -1782,7 +1793,7 @@
         if (e.target === overlay && entry.downOnOverlay && !opts.static) close();
         if (e.target.closest('[data-close]')) close();
       });
-      overlay.addEventListener('keydown', function (e) {
+      entry.onKey = function (e) {
         if (stack[stack.length - 1] !== entry) return;
         if (e.key === 'Escape') {
           if (e.target.getAttribute('aria-expanded') === 'true') return; // закрытие выпадающего списка
@@ -1795,7 +1806,7 @@
           if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
           else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
         }
-      });
+      };
       document.body.appendChild(overlay);
       stack.push(entry);
       setInert();
@@ -1964,7 +1975,7 @@
       }
       root.setAttribute('data-theme', t);
       var meta = $('meta[name="theme-color"]');
-      if (meta) meta.setAttribute('content', t === 'dark' ? '#1a1a1d' : '#f7f8fa');
+      if (meta) meta.setAttribute('content', t === 'dark' ? '#1a1a1d' : '#f8f6fd');
       $$('[data-theme-toggle]').forEach(function (b) {
         b.setAttribute('aria-checked', t === 'dark' ? 'true' : 'false');
         b.setAttribute('aria-label', t === 'dark' ? 'Тёмная тема включена' : 'Тёмная тема выключена');
