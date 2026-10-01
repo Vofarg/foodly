@@ -80,7 +80,7 @@
    * ======================================================================= */
   var Storage = (function () {
     var NS = 'foodly:v1:';
-    var SCHEMA_VERSION = 4;
+    var SCHEMA_VERSION = 6;
     var onError = function () {};
     var readErrors = 0;
 
@@ -155,7 +155,23 @@
           if (dp) { r.photoUrl = dp.photoUrl; r.photoCredit = dp.photoCredit; }
         });
         return data;
-      }
+      },
+      // v4 -> v5: новые фото по умолчанию. Меняем только те, что пользователь не трогал (стоит прежнее фото по умолчанию или фото нет вовсе)
+      4: function (data) {
+        var M = Foodly.Models; if (!M) return data;
+        var legacy = {}; (M.LEGACY_DEFAULT_URLS || []).forEach(function (u) { legacy[u] = true; });
+        (data.recipes || []).forEach(function (r) {
+          var dp = M.defaultPhoto(r.id); if (!dp) return;
+          var untouchedDefault = r.photoUrl && legacy[r.photoUrl] && !r.photo;
+          var empty = !r.photoId && !r.photo && !r.photoUrl;
+          if (!untouchedDefault && !empty) return;
+          r.photoUrl = dp.photoUrl; r.photoCredit = dp.photoCredit;
+          r.photoId = null; r.photo = null; delete r.photoCopyFailedAt;   // старая локальная копия уйдёт при очистке «сирот»
+        });
+        return data;
+      },
+      // v5 -> v6: заменили два фото по умолчанию (гречка, салат с фетой) — та же логика, что и в v4 -> v5
+      5: function (data) { return migrations[4](data); }
     };
     function migrate(data, fromVersion) {
       var v = fromVersion || 1;
@@ -489,34 +505,39 @@
         steps: ['Крупно нарежьте огурцы, помидоры и перец.', 'Нарежьте лук тонкими полукольцами.', 'Выложите овощи, оливки и кубики феты в миску.', 'Полейте маслом и посыпьте орегано.'] }
     ];
 
-    /* Фото по умолчанию — Wikimedia Commons (свободные лицензии; автор и лицензия на странице файла) */
+    /* Фото по умолчанию: Unsplash (бесплатная лицензия Unsplash) и Wikimedia Commons (свободные лицензии).
+       Автор и источник — в подписи под фото, по ссылке — страница фото с лицензией */
     var DEFAULT_PHOTOS = {
-      'r-oatmeal': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Breakfast_porridge.jpg/960px-Breakfast_porridge.jpg', page: 'https://commons.wikimedia.org/wiki/File:Breakfast_porridge.jpg' },
-      'r-syrniki': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c9/Syrniki_with_fruits.jpg/960px-Syrniki_with_fruits.jpg', page: 'https://commons.wikimedia.org/wiki/File:Syrniki_with_fruits.jpg' },
-      'r-omelet': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4a/Omelette_de_verduras.jpg/960px-Omelette_de_verduras.jpg', page: 'https://commons.wikimedia.org/wiki/File:Omelette_de_verduras.jpg' },
-      'r-avocado-toast': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/b/bd/Avocado_toast_with_eggs_(28508171495).jpg/960px-Avocado_toast_with_eggs_(28508171495).jpg', page: 'https://commons.wikimedia.org/wiki/File:Avocado_toast_with_eggs_(28508171495).jpg' },
-      'r-yogurt-granola': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6c/Yogurt,_fruit,_granola_bowl_(34999358091).jpg/960px-Yogurt,_fruit,_granola_bowl_(34999358091).jpg', page: 'https://commons.wikimedia.org/wiki/File:Yogurt,_fruit,_granola_bowl_(34999358091).jpg' },
-      'r-salmon-toast': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e3/Salmon_Cream_Cheese_Sandwiches.jpg/960px-Salmon_Cream_Cheese_Sandwiches.jpg', page: 'https://commons.wikimedia.org/wiki/File:Salmon_Cream_Cheese_Sandwiches.jpg' },
-      'r-borsch': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Borscht_served.jpg/960px-Borscht_served.jpg', page: 'https://commons.wikimedia.org/wiki/File:Borscht_served.jpg' },
-      'r-plov': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ec/Pilaf_with_chicken.jpg/960px-Pilaf_with_chicken.jpg', page: 'https://commons.wikimedia.org/wiki/File:Pilaf_with_chicken.jpg' },
-      'r-pasta-navy': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/2/27/Navy-style_2020-01-30_%D0%9C%D0%B0%D0%BA%D0%B0%D1%80%D0%BE%D0%BD%D1%8B_%C2%AB%D0%BF%D0%BE-%D1%84%D0%BB%D0%BE%D1%82%D1%81%D0%BA%D0%B8%C2%BB.jpg/960px-Navy-style_2020-01-30_%D0%9C%D0%B0%D0%BA%D0%B0%D1%80%D0%BE%D0%BD%D1%8B_%C2%AB%D0%BF%D0%BE-%D1%84%D0%BB%D0%BE%D1%82%D1%81%D0%BA%D0%B8%C2%BB.jpg', page: 'https://commons.wikimedia.org/wiki/File:Navy-style_2020-01-30_%D0%9C%D0%B0%D0%BA%D0%B0%D1%80%D0%BE%D0%BD%D1%8B_%C2%AB%D0%BF%D0%BE-%D1%84%D0%BB%D0%BE%D1%82%D1%81%D0%BA%D0%B8%C2%BB.jpg' },
-      'r-buckwheat-mush': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/9/96/%D0%93%D1%80%D0%B5%D1%87%D0%BD%D0%B5%D0%B2%D0%B0%D1%8F_%D0%BA%D0%B0%D1%88%D0%B0.jpg/960px-%D0%93%D1%80%D0%B5%D1%87%D0%BD%D0%B5%D0%B2%D0%B0%D1%8F_%D0%BA%D0%B0%D1%88%D0%B0.jpg', page: 'https://commons.wikimedia.org/wiki/File:%D0%93%D1%80%D0%B5%D1%87%D0%BD%D0%B5%D0%B2%D0%B0%D1%8F_%D0%BA%D0%B0%D1%88%D0%B0.jpg' },
-      'r-lentil-soup': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1e/Red_lentil_soup.jpg/960px-Red_lentil_soup.jpg', page: 'https://commons.wikimedia.org/wiki/File:Red_lentil_soup.jpg' },
-      'r-caesar': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Caesar_salad_(2).jpg/960px-Caesar_salad_(2).jpg', page: 'https://commons.wikimedia.org/wiki/File:Caesar_salad_(2).jpg' },
-      'r-salmon-broccoli': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/f/f1/Grilled_plated_salmon_fillet.jpg/960px-Grilled_plated_salmon_fillet.jpg', page: 'https://commons.wikimedia.org/wiki/File:Grilled_plated_salmon_fillet.jpg' },
-      'r-cutlets-mash': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/Ragout.jpg/960px-Ragout.jpg', page: 'https://commons.wikimedia.org/wiki/File:Ragout.jpg' },
-      'r-turkey-ragout': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/15/Ratatouille_001.jpg/960px-Ratatouille_001.jpg', page: 'https://commons.wikimedia.org/wiki/File:Ratatouille_001.jpg' },
-      'r-cod-rice': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/7/7a/Plated_grilled_fish.jpg/960px-Plated_grilled_fish.jpg', page: 'https://commons.wikimedia.org/wiki/File:Plated_grilled_fish.jpg' },
-      'r-bolognese': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/Spaghetti_bolognese.jpg/960px-Spaghetti_bolognese.jpg', page: 'https://commons.wikimedia.org/wiki/File:Spaghetti_bolognese.jpg' },
-      'r-shakshuka': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/18/Shakshuka_by_Calliopejen1.jpg/960px-Shakshuka_by_Calliopejen1.jpg', page: 'https://commons.wikimedia.org/wiki/File:Shakshuka_by_Calliopejen1.jpg' },
-      'r-smoothie': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3f/Banna_Yogurt_Smoothie.jpg/960px-Banna_Yogurt_Smoothie.jpg', page: 'https://commons.wikimedia.org/wiki/File:Banna_Yogurt_Smoothie.jpg' },
-      'r-cottage-berries': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/82/Cottage_Cheese_homemade.jpg/960px-Cottage_Cheese_homemade.jpg', page: 'https://commons.wikimedia.org/wiki/File:Cottage_Cheese_homemade.jpg' },
-      'r-hummus': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/9/9e/Hummus_Dip_(30863436677).jpg/960px-Hummus_Dip_(30863436677).jpg', page: 'https://commons.wikimedia.org/wiki/File:Hummus_Dip_(30863436677).jpg' },
-      'r-greek-salad': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ac/Greek_salad.jpg/960px-Greek_salad.jpg', page: 'https://commons.wikimedia.org/wiki/File:Greek_salad.jpg' }
+      'r-oatmeal': { url: 'https://images.unsplash.com/photo-1548807371-30dc1bbe6cb5?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/Vk044I3w1gI', source: 'Alexandru Acea / Unsplash' },
+      'r-syrniki': { url: 'https://images.unsplash.com/photo-1682219179121-36821753748d?w=1200&h=750&fit=crop&q=80&fm=jpg&crop=focalpoint&fp-x=0.5&fp-y=0.73', page: 'https://unsplash.com/photos/WXNfNUFSeSU', source: 'Masha Koko / Unsplash' },
+      'r-omelet': { url: 'https://images.unsplash.com/photo-1677844592730-ce9c936d8f1a?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/SCZP5rvZINk', source: 'Bakd&Raw by Karolin Baitinger / Unsplash' },
+      'r-avocado-toast': { url: 'https://images.unsplash.com/photo-1719520670204-dbe1903a789f?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/P7oGUDHswIA', source: 'Andrew Spencer / Unsplash' },
+      'r-yogurt-granola': { url: 'https://images.unsplash.com/photo-1633104060731-32143505bacc?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/z71M3cfW40c', source: 'Shayna Douglas / Unsplash' },
+      'r-salmon-toast': { url: 'https://images.unsplash.com/photo-1627308594171-ebd99b564ff6?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/ITiXi1rN4xA', source: 'Vicky Ng / Unsplash' },
+      'r-borsch': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Borscht_served.jpg/960px-Borscht_served.jpg', page: 'https://commons.wikimedia.org/wiki/File:Borscht_served.jpg', source: 'Wikimedia Commons' },
+      'r-plov': { url: 'https://images.unsplash.com/photo-1634324092526-91f5e878b72f?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/ojDzHZHcVx4', source: 'Eugene Krasnaok / Unsplash' },
+      'r-pasta-navy': { url: 'https://images.unsplash.com/photo-1779914895538-33353ea52e64?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/Zpag5-WH_1Y', source: 'Csaba Lévai / Unsplash' },
+      'r-buckwheat-mush': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Grechka.jpg/960px-Grechka.jpg', page: 'https://commons.wikimedia.org/wiki/File:Grechka.jpg', source: 'Kagor / Wikimedia Commons' },
+      'r-lentil-soup': { url: 'https://images.unsplash.com/photo-1476718406336-bb5a9690ee2a?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/w6ftFbPCs9I', source: 'Cala / Unsplash' },
+      'r-caesar': { url: 'https://images.unsplash.com/photo-1605291535065-e1d52d2b264a?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/1kOsQoehjZA', source: 'logan jeffrey / Unsplash' },
+      'r-salmon-broccoli': { url: 'https://images.unsplash.com/photo-1675209705883-7aec595f5aa8?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/RZV1-tNbHy4', source: 'Camara Negra / Unsplash' },
+      'r-cutlets-mash': { url: 'https://images.unsplash.com/photo-1652690772758-45df96e11c50?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/GPta6bE6Nvw', source: 'Kristóf Koródy / Unsplash' },
+      'r-turkey-ragout': { url: 'https://images.unsplash.com/photo-1604908177453-7462950a6a3b?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/TvMWBS6TIsg', source: 'Farhad Ibrahimzade / Unsplash' },
+      'r-cod-rice': { url: 'https://images.unsplash.com/photo-1706468238744-6af411063336?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/WaFaLcxXfLM', source: 'Jason Leung / Unsplash' },
+      'r-bolognese': { url: 'https://images.unsplash.com/photo-1598866594230-a7c12756260f?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/qits91IZv1o', source: 'Danijela Prijovic / Unsplash' },
+      'r-shakshuka': { url: 'https://images.unsplash.com/photo-1590412200988-a436970781fa?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/422N7Nwq5XY', source: 'Yoav Aziz / Unsplash' },
+      'r-smoothie': { url: 'https://images.unsplash.com/photo-1570696516188-ade861b84a49?w=1200&h=750&fit=crop&q=80&fm=jpg&crop=focalpoint&fp-x=0.47&fp-y=0.66&fp-z=1.4', page: 'https://unsplash.com/photos/hsTwPUzFegQ', source: 'Denis / Unsplash' },
+      'r-cottage-berries': { url: 'https://images.unsplash.com/photo-1614630536994-a6b781d56e15?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/odLdpSRRZtQ', source: 'Olena Bohovyk / Unsplash' },
+      'r-hummus': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/9/9e/Hummus_Dip_(30863436677).jpg/960px-Hummus_Dip_(30863436677).jpg', page: 'https://commons.wikimedia.org/wiki/File:Hummus_Dip_(30863436677).jpg', source: 'Wikimedia Commons' },
+      'r-apple-pb': { url: 'https://images.unsplash.com/photo-1642339800118-eb551cfa1434?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/F-ReDCrjQbo', source: 'Aasiya Khan / Unsplash' },
+      'r-energy-balls': { url: 'https://images.unsplash.com/photo-1647532197692-ad9f2ecae422?w=1200&h=750&fit=crop&q=80&fm=jpg', page: 'https://unsplash.com/photos/1FIZR8YWbzk', source: 'Nature Zen / Unsplash' },
+      'r-greek-salad': { url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/45/20240428_Greek_Salad_Restaurant_Elia_anagoria.jpg/960px-20240428_Greek_Salad_Restaurant_Elia_anagoria.jpg', page: 'https://commons.wikimedia.org/wiki/File:20240428_Greek_Salad_Restaurant_Elia_anagoria.jpg', source: 'Anagoria / Wikimedia Commons' }
     };
+    /* Прежние фото по умолчанию (до v6): по ним миграция узнаёт, что пользователь фото не менял */
+    var LEGACY_DEFAULT_URLS = ['https://cdn.lifehacker.ru/wp-content/uploads/2024/11/103_1732278919.jpg', 'https://static.1000.menu/img/content/26232/salat-s-balzamicheskim-uksusom_1521917351_10_max.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/15/Ratatouille_001.jpg/960px-Ratatouille_001.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/18/Shakshuka_by_Calliopejen1.jpg/960px-Shakshuka_by_Calliopejen1.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1e/Red_lentil_soup.jpg/960px-Red_lentil_soup.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Caesar_salad_(2).jpg/960px-Caesar_salad_(2).jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/2/27/Navy-style_2020-01-30_%D0%9C%D0%B0%D0%BA%D0%B0%D1%80%D0%BE%D0%BD%D1%8B_%C2%AB%D0%BF%D0%BE-%D1%84%D0%BB%D0%BE%D1%82%D1%81%D0%BA%D0%B8%C2%BB.jpg/960px-Navy-style_2020-01-30_%D0%9C%D0%B0%D0%BA%D0%B0%D1%80%D0%BE%D0%BD%D1%8B_%C2%AB%D0%BF%D0%BE-%D1%84%D0%BB%D0%BE%D1%82%D1%81%D0%BA%D0%B8%C2%BB.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3f/Banna_Yogurt_Smoothie.jpg/960px-Banna_Yogurt_Smoothie.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4a/Omelette_de_verduras.jpg/960px-Omelette_de_verduras.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6c/Yogurt,_fruit,_granola_bowl_(34999358091).jpg/960px-Yogurt,_fruit,_granola_bowl_(34999358091).jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/7/7a/Plated_grilled_fish.jpg/960px-Plated_grilled_fish.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/82/Cottage_Cheese_homemade.jpg/960px-Cottage_Cheese_homemade.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/9/96/%D0%93%D1%80%D0%B5%D1%87%D0%BD%D0%B5%D0%B2%D0%B0%D1%8F_%D0%BA%D0%B0%D1%88%D0%B0.jpg/960px-%D0%93%D1%80%D0%B5%D1%87%D0%BD%D0%B5%D0%B2%D0%B0%D1%8F_%D0%BA%D0%B0%D1%88%D0%B0.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ac/Greek_salad.jpg/960px-Greek_salad.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/b/bd/Avocado_toast_with_eggs_(28508171495).jpg/960px-Avocado_toast_with_eggs_(28508171495).jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/Spaghetti_bolognese.jpg/960px-Spaghetti_bolognese.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Breakfast_porridge.jpg/960px-Breakfast_porridge.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c9/Syrniki_with_fruits.jpg/960px-Syrniki_with_fruits.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/Ragout.jpg/960px-Ragout.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e3/Salmon_Cream_Cheese_Sandwiches.jpg/960px-Salmon_Cream_Cheese_Sandwiches.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ec/Pilaf_with_chicken.jpg/960px-Pilaf_with_chicken.jpg', 'https://upload.wikimedia.org/wikipedia/commons/thumb/f/f1/Grilled_plated_salmon_fillet.jpg/960px-Grilled_plated_salmon_fillet.jpg'];
     function defaultPhoto(id) {
       var d = DEFAULT_PHOTOS[id];
-      return d ? { photoUrl: d.url, photoCredit: { source: 'Wikimedia Commons', page: d.page } } : null;
+      return d ? { photoUrl: d.url, photoCredit: { source: d.source || 'Wikimedia Commons', page: d.page } } : null;
     }
 
     function buildRecipes() {
@@ -545,7 +566,7 @@
     }
 
     return { UNITS: UNITS, MEALS: MEALS, DEFAULT_CATEGORIES: DEFAULT_CATEGORIES,
-      buildProducts: buildProducts, buildRecipes: buildRecipes, defaultPhoto: defaultPhoto, defaultSettings: defaultSettings,
+      buildProducts: buildProducts, buildRecipes: buildRecipes, defaultPhoto: defaultPhoto, LEGACY_DEFAULT_URLS: LEGACY_DEFAULT_URLS, defaultSettings: defaultSettings,
       mealName: function (id) { var m = MEALS.filter(function (x) { return x.id === id; })[0]; return m ? m.name : id; } };
   })();
   Foodly.Models = Models;

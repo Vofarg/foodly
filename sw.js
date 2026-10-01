@@ -1,6 +1,6 @@
 /* Foodly! — сервис-воркер: precache оболочки + stale-while-revalidate для CDN */
 'use strict';
-var VERSION = 'foodly-v1.5.0';
+var VERSION = 'foodly-v1.6.2';
 var PRECACHE = VERSION + '-precache';
 var RUNTIME = VERSION + '-runtime';
 var IMAGES = 'foodly-images';        // фото по ссылкам: не версионируется, чтобы не терять их при обновлении
@@ -113,14 +113,13 @@ self.addEventListener('fetch', function (event) {
     );
     return;
   }
-  // Файлы приложения: cache-first с обновлением в фоне
+  // Файлы приложения: сначала сеть (чтобы правки были видны сразу после перезагрузки), офлайн — из кеша
   event.respondWith(
-    caches.match(req, { ignoreSearch: true }).then(function (cached) {
-      var network = fetch(req).then(function (res) {
-        if (res && res.ok) { var copy = res.clone(); caches.open(PRECACHE).then(function (c) { c.put(req, copy); }); }
-        return res;
-      }).catch(function () { return cached; });
-      return cached || network;
+    fetch(req, { cache: 'no-cache' }).then(function (res) {
+      if (res && res.ok) { var copy = res.clone(); caches.open(PRECACHE).then(function (c) { c.put(req, copy); }); }
+      return res;
+    }).catch(function () {
+      return caches.match(req, { ignoreSearch: true });
     })
   );
 });
