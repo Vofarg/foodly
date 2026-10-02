@@ -80,7 +80,7 @@
    * ======================================================================= */
   var Storage = (function () {
     var NS = 'foodly:v1:';
-    var SCHEMA_VERSION = 6;
+    var SCHEMA_VERSION = 7;
     var onError = function () {};
     var readErrors = 0;
 
@@ -171,7 +171,21 @@
         return data;
       },
       // v5 -> v6: заменили два фото по умолчанию (гречка, салат с фетой) — та же логика, что и в v4 -> v5
-      5: function (data) { return migrations[4](data); }
+      5: function (data) { return migrations[4](data); },
+      // v6 -> v7: черновики рецептов (draft), диеты (settings.diets добавит DB.ensureIntegrity), новые демо-рецепты для диет
+      6: function (data) {
+        var M = Foodly.Models;
+        data.recipes = data.recipes || [];
+        data.recipes.forEach(function (r) { if (r.draft === undefined) r.draft = false; });
+        if (data.settings && data.settings.restrictions && !Array.isArray(data.settings.restrictions.diets)) data.settings.restrictions.diets = [];
+        if (M && M.V17_RECIPE_IDS) {
+          var have = {}; data.recipes.forEach(function (r) { have[r.id] = true; });
+          M.buildRecipes().forEach(function (r) {
+            if (M.V17_RECIPE_IDS.indexOf(r.id) >= 0 && !have[r.id]) { r.draft = false; r.createdAt = r.updatedAt = Date.now(); data.recipes.push(r); }
+          });
+        }
+        return data;
+      }
     };
     function migrate(data, fromVersion) {
       var v = fromVersion || 1;
@@ -356,6 +370,7 @@
       ['olives', 'Оливки', 'grocery', 145, 1.0, 15.3, 0.5, 3.3, { 'шт': 4 }],
       ['pickles', 'Огурцы маринованные', 'grocery', 11, 0.8, 0.1, 1.7, 1.0, { 'шт': 60 }],
       ['coconut-milk', 'Кокосовое молоко', 'grocery', 200, 2.0, 21.0, 2.8, 0, { 'мл': 1.0 }],
+      ['tofu', 'Тофу', 'grocery', 76, 8.1, 4.8, 1.9, 0.3, {}],
       ['breadcrumbs', 'Панировочные сухари', 'grocery', 343, 9.7, 1.9, 71.7, 4.5, { 'ст. л.': 10 }],
       ['starch', 'Крахмал кукурузный', 'grocery', 343, 1.0, 0.6, 85.0, 0.9, { 'ст. л.': 10, 'ч. л.': 3 }],
       // Масла и соусы
@@ -502,8 +517,77 @@
         steps: ['Удалите косточки из фиников.', 'Измельчите миндаль в блендере, добавьте финики, какао и чиа, пробейте до липкой массы.', 'Скатайте 8 шариков и обваляйте в кокосовой стружке.', 'Уберите в холодильник на 30 минут.'] },
       { id: 'r-greek-salad', title: 'Овощной салат с фетой', servings: 2, meals: ['snack', 'dinner'], cuisine: 'Греческая', tags: ['салат', 'без готовки'],
         ing: [['cucumber', 2, 'шт'], ['tomato', 2, 'шт'], ['bell-pepper', 1, 'шт'], ['red-onion', 0.5, 'шт'], ['feta', 100, 'г'], ['olives', 10, 'шт'], ['olive-oil', 1, 'ст. л.'], ['oregano', 0.5, 'ч. л.']],
-        steps: ['Крупно нарежьте огурцы, помидоры и перец.', 'Нарежьте лук тонкими полукольцами.', 'Выложите овощи, оливки и кубики феты в миску.', 'Полейте маслом и посыпьте орегано.'] }
+        steps: ['Крупно нарежьте огурцы, помидоры и перец.', 'Нарежьте лук тонкими полукольцами.', 'Выложите овощи, оливки и кубики феты в миску.', 'Полейте маслом и посыпьте орегано.'] },
+      // ---- Добавлены в v1.7 (для диет: кето, веганская, безглютеновая) ----
+      { id: 'r-keto-eggs', title: 'Яичница с беконом и авокадо', servings: 1, meals: ['breakfast'], cuisine: 'Европейская', tags: ['яйца', 'быстро'],
+        ing: [['egg', 3, 'шт'], ['bacon', 2, 'шт'], ['avocado', 0.5, 'шт'], ['butter', 5, 'г'], ['salt', 0, 'по вкусу'], ['black-pepper', 1, 'щепотка']],
+        steps: ['Обжарьте бекон на сухой сковороде до хруста, переложите на тарелку.', 'Растопите сливочное масло в той же сковороде и разбейте яйца.', 'Жарьте 3–4 минуты, посолите и поперчите.', 'Подавайте с беконом и ломтиками авокадо.'] },
+      { id: 'r-tuna-salad', title: 'Салат с тунцом, яйцом и огурцом', servings: 2, meals: ['lunch', 'dinner'], cuisine: 'Домашняя', tags: ['салат', 'рыба', 'быстро'],
+        ing: [['tuna-canned', 1, 'шт'], ['egg', 2, 'шт'], ['cucumber', 1, 'шт'], ['lettuce', 80, 'г'], ['olive-oil', 1, 'ст. л.'], ['mayo', 1, 'ст. л.'], ['salt', 0, 'по вкусу']],
+        steps: ['Сварите яйца вкрутую (9 минут), остудите и нарежьте.', 'Нарежьте огурец, порвите листья салата.', 'Слейте жидкость с тунца и разберите его вилкой.', 'Смешайте всё, заправьте оливковым маслом и майонезом, посолите.'] },
+      { id: 'r-chicken-thighs-veg', title: 'Куриные бёдра с кабачком и перцем', servings: 3, meals: ['dinner', 'lunch'], cuisine: 'Домашняя', tags: ['курица', 'духовка'],
+        ing: [['chicken-thigh', 600, 'г'], ['zucchini', 1, 'шт'], ['bell-pepper', 1, 'шт'], ['olive-oil', 2, 'ст. л.'], ['garlic', 2, 'шт'], ['paprika', 1, 'ч. л.'], ['salt', 0, 'по вкусу']],
+        steps: ['Разогрейте духовку до 200 °C.', 'Натрите бёдра паприкой, солью и рубленым чесноком.', 'Нарежьте кабачок и перец крупными кусками, смешайте с маслом.', 'Выложите всё на противень и запекайте 30–35 минут.'] },
+      { id: 'r-cheese-nuts', title: 'Сыр с грецкими орехами', servings: 1, meals: ['snack'], cuisine: 'Домашняя', tags: ['без готовки', 'быстро'],
+        ing: [['cheese', 40, 'г'], ['walnuts', 15, 'г']], steps: ['Нарежьте сыр кубиками.', 'Подавайте с грецкими орехами.'] },
+      { id: 'r-chickpea-curry', title: 'Карри из нута со шпинатом и рисом', servings: 4, meals: ['lunch', 'dinner'], cuisine: 'Индийская', tags: ['постное', 'бобовые'],
+        ing: [['chickpeas', 200, 'г'], ['coconut-milk', 200, 'мл'], ['canned-tomatoes', 400, 'г'], ['onion', 1, 'шт'], ['garlic', 2, 'шт'], ['curry', 2, 'ч. л.'], ['spinach', 100, 'г'], ['olive-oil', 1, 'ст. л.'], ['rice', 200, 'г'], ['salt', 0, 'по вкусу']],
+        steps: ['Замочите нут на ночь и отварите до мягкости (около 1,5 часа).', 'Отварите рис.', 'Обжарьте лук и чеснок на масле, добавьте карри и прогрейте 1 минуту.', 'Добавьте томаты, кокосовое молоко и нут, тушите 15 минут.', 'Вмешайте шпинат, посолите и подавайте с рисом.'] },
+      { id: 'r-oat-chia', title: 'Овсянка на овсяном молоке с ягодами и чиа', servings: 1, meals: ['breakfast', 'snack'], cuisine: 'Домашняя', tags: ['каша', 'постное', 'быстро'],
+        ing: [['oats', 50, 'г'], ['oat-milk', 200, 'мл'], ['berries-frozen', 80, 'г'], ['chia', 1, 'ст. л.']],
+        steps: ['Залейте хлопья овсяным молоком и варите 5 минут, помешивая.', 'Вмешайте семена чиа и дайте постоять 3 минуты.', 'Выложите сверху ягоды.'] },
+      { id: 'r-tofu-scramble', title: 'Тофу-скрэмбл с овощами', servings: 2, meals: ['breakfast'], cuisine: 'Домашняя', tags: ['постное', 'быстро'],
+        ing: [['tofu', 250, 'г'], ['tomato', 1, 'шт'], ['bell-pepper', 0.5, 'шт'], ['spinach', 50, 'г'], ['turmeric', 0.5, 'ч. л.'], ['olive-oil', 1, 'ст. л.'], ['salt', 0, 'по вкусу'], ['black-pepper', 1, 'щепотка']],
+        steps: ['Нарежьте помидор и перец небольшими кубиками.', 'Обжарьте перец на оливковом масле 3 минуты.', 'Раскрошите тофу руками прямо в сковороду, добавьте куркуму и перемешайте.', 'Добавьте помидор и шпинат, готовьте ещё 3–4 минуты. Посолите и поперчите.'] },
+      { id: 'r-millet-pumpkin', title: 'Пшённая каша с тыквой', servings: 2, meals: ['breakfast'], cuisine: 'Русская', tags: ['каша', 'постное'],
+        ing: [['millet', 100, 'г'], ['pumpkin', 250, 'г'], ['water', 450, 'мл'], ['raisins', 20, 'г'], ['salt', 1, 'щепотка'], ['cinnamon', 1, 'щепотка']],
+        steps: ['Промойте пшено несколько раз горячей водой.', 'Нарежьте тыкву мелкими кубиками.', 'Залейте пшено и тыкву водой, посолите и варите под крышкой 20–25 минут на слабом огне.', 'Вмешайте изюм, посыпьте корицей и дайте постоять 5 минут.'] },
+      { id: 'r-bean-stew', title: 'Тушёная фасоль с овощами', servings: 3, meals: ['lunch', 'dinner'], cuisine: 'Домашняя', tags: ['постное', 'бобовые'],
+        ing: [['beans-canned', 400, 'г'], ['onion', 1, 'шт'], ['carrot', 1, 'шт'], ['bell-pepper', 1, 'шт'], ['canned-tomatoes', 400, 'г'], ['garlic', 2, 'шт'], ['paprika', 1, 'ч. л.'], ['olive-oil', 2, 'ст. л.'], ['parsley', 1, 'ст. л.'], ['salt', 0, 'по вкусу']],
+        steps: ['Нарежьте лук, морковь и перец, обжарьте на масле 7 минут.', 'Добавьте чеснок и паприку, прогрейте 1 минуту.', 'Вылейте томаты, добавьте фасоль без жидкости и тушите 15 минут.', 'Посолите и посыпьте петрушкой.'] },
+      { id: 'r-quinoa-salad', title: 'Салат с киноа, авокадо и черри', servings: 2, meals: ['lunch', 'dinner'], cuisine: 'Европейская', tags: ['салат', 'постное'],
+        ing: [['quinoa', 120, 'г'], ['cherry', 10, 'шт'], ['cucumber', 1, 'шт'], ['avocado', 1, 'шт'], ['lemon', 2, 'ст. л.'], ['olive-oil', 2, 'ст. л.'], ['parsley', 2, 'ст. л.'], ['salt', 0, 'по вкусу']],
+        steps: ['Промойте киноа и отварите в подсоленной воде 15 минут, остудите.', 'Разрежьте черри пополам, нарежьте огурец и авокадо.', 'Смешайте всё с киноа и петрушкой.', 'Заправьте лимонным соком и маслом, посолите.'] },
+      { id: 'r-spinach-feta-omelet', title: 'Омлет со шпинатом и фетой', servings: 1, meals: ['breakfast'], cuisine: 'Европейская', tags: ['яйца', 'быстро'],
+        ing: [['egg', 3, 'шт'], ['spinach', 50, 'г'], ['feta', 30, 'г'], ['butter', 5, 'г'], ['salt', 0, 'по вкусу']],
+        steps: ['Взбейте яйца со щепоткой соли.', 'Растопите масло, обжарьте шпинат 1 минуту.', 'Залейте яйцами, посыпьте раскрошенной фетой.', 'Готовьте под крышкой 4–5 минут на слабом огне.'] },
+      { id: 'r-pork-cauliflower', title: 'Свинина с цветной капустой в духовке', servings: 3, meals: ['lunch', 'dinner'], cuisine: 'Домашняя', tags: ['духовка'],
+        ing: [['pork', 450, 'г'], ['cauliflower', 400, 'г'], ['garlic', 3, 'шт'], ['olive-oil', 2, 'ст. л.'], ['herbs', 1, 'ч. л.'], ['salt', 0, 'по вкусу'], ['black-pepper', 1, 'щепотка']],
+        steps: ['Разогрейте духовку до 200 °C.', 'Нарежьте свинину кусками, натрите солью, перцем, травами и чесноком.', 'Разберите капусту на соцветия и смешайте с маслом.', 'Выложите на противень и запекайте 35 минут, перемешав в середине.'] },
+      { id: 'r-chicken-broccoli-soup', title: 'Куриный суп с брокколи и шпинатом', servings: 4, meals: ['lunch'], cuisine: 'Домашняя', tags: ['суп', 'курица'],
+        ing: [['chicken-breast', 350, 'г'], ['broccoli', 300, 'г'], ['spinach', 80, 'г'], ['onion', 0.5, 'шт'], ['water', 1500, 'мл'], ['bay-leaf', 1, 'шт'], ['salt', 0, 'по вкусу']],
+        steps: ['Залейте курицу водой, добавьте лук и лавровый лист, варите 25 минут.', 'Выньте курицу, нарежьте кусочками и верните в бульон.', 'Добавьте соцветия брокколи и варите 7 минут.', 'Вмешайте шпинат, посолите и выключите огонь.'] },
+      { id: 'r-garlic-shrimp-zucchini', title: 'Креветки с чесноком и кабачком', servings: 2, meals: ['dinner', 'lunch'], cuisine: 'Средиземноморская', tags: ['морепродукты', 'быстро'],
+        ing: [['shrimp', 350, 'г'], ['zucchini', 2, 'шт'], ['garlic', 3, 'шт'], ['butter', 15, 'г'], ['olive-oil', 1, 'ст. л.'], ['lemon', 1, 'ст. л.'], ['parsley', 1, 'ст. л.'], ['salt', 0, 'по вкусу']],
+        steps: ['Нарежьте кабачки полукружиями и обжарьте на оливковом масле 5 минут.', 'Добавьте сливочное масло и рубленый чеснок.', 'Выложите креветки и прогрейте 3 минуты.', 'Сбрызните лимонным соком, посолите и посыпьте петрушкой.'] },
+      { id: 'r-stuffed-eggs', title: 'Яйца, фаршированные тунцом', servings: 2, meals: ['snack'], cuisine: 'Домашняя', tags: ['яйца', 'закуска'],
+        ing: [['egg', 4, 'шт'], ['tuna-canned', 0.5, 'шт'], ['mayo', 1, 'ст. л.'], ['dill', 1, 'ст. л.'], ['salt', 0, 'по вкусу']],
+        steps: ['Сварите яйца вкрутую (9 минут), остудите и разрежьте пополам.', 'Достаньте желтки и разомните их с тунцом и майонезом.', 'Наполните белки начинкой и посыпьте укропом.'] },
+      { id: 'r-tofu-rice', title: 'Рис с овощами и тофу', servings: 3, meals: ['lunch', 'dinner'], cuisine: 'Азиатская', tags: ['постное', 'вок'],
+        ing: [['rice', 180, 'г'], ['tofu', 250, 'г'], ['veg-mix', 400, 'г'], ['soy-sauce', 2, 'ст. л.'], ['sunflower-oil', 2, 'ст. л.'], ['garlic', 2, 'шт'], ['ginger', 1, 'ч. л.']],
+        steps: ['Отварите рис.', 'Нарежьте тофу кубиками и обжарьте на половине масла до корочки, переложите.', 'На оставшемся масле обжарьте чеснок, имбирь и овощную смесь 6–7 минут.', 'Добавьте рис, тофу и соевый соус, перемешайте и прогрейте 2 минуты.'] },
+      { id: 'r-pumpkin-soup', title: 'Суп-пюре из тыквы на кокосовом молоке', servings: 4, meals: ['lunch', 'dinner'], cuisine: 'Домашняя', tags: ['суп', 'постное'],
+        ing: [['pumpkin', 600, 'г'], ['coconut-milk', 200, 'мл'], ['onion', 1, 'шт'], ['carrot', 1, 'шт'], ['ginger', 1, 'ч. л.'], ['olive-oil', 1, 'ст. л.'], ['water', 500, 'мл'], ['pumpkin-seeds', 20, 'г'], ['salt', 0, 'по вкусу']],
+        steps: ['Нарежьте тыкву, лук и морковь кубиками.', 'Обжарьте лук и морковь на масле 5 минут, добавьте имбирь.', 'Добавьте тыкву и воду, варите 20 минут до мягкости.', 'Влейте кокосовое молоко, пробейте блендером и посолите.', 'Подавайте с тыквенными семечками.'] }
     ];
+    var V17_RECIPE_IDS = ['r-keto-eggs', 'r-tuna-salad', 'r-chicken-thighs-veg', 'r-cheese-nuts', 'r-chickpea-curry', 'r-oat-chia', 'r-tofu-scramble', 'r-millet-pumpkin',
+      'r-bean-stew', 'r-quinoa-salad', 'r-spinach-feta-omelet', 'r-pork-cauliflower', 'r-chicken-broccoli-soup', 'r-garlic-shrimp-zucchini', 'r-stuffed-eggs', 'r-tofu-rice', 'r-pumpkin-soup'];
+
+    /* Встроенные диеты. Диета = исключённые категории + отдельные продукты − исключения (allow) + необязательный лимит углеводов на порцию.
+       Новый продукт в исключённой категории исключается автоматически. */
+    var DEFAULT_DIETS = [
+      { id: 'vegetarian', name: 'Вегетарианская', emoji: '🥦', categories: ['meat', 'fish'], products: [], allow: [], maxCarbs: null },
+      { id: 'vegan', name: 'Веганская', emoji: '🌱', categories: ['meat', 'fish', 'dairy'], products: ['honey'], allow: [], maxCarbs: null },
+      { id: 'gluten-free', name: 'Безглютеновая', emoji: '🌾', categories: ['bread'],
+        products: ['flour', 'pasta', 'spaghetti', 'noodles', 'couscous', 'bulgur', 'semolina', 'breadcrumbs', 'granola', 'oats', 'soy-sauce', 'crab-sticks', 'sausages', 'oat-milk'], allow: [], maxCarbs: null },
+      { id: 'lactose-free', name: 'Безлактозная', emoji: '🥛', categories: [],
+        products: ['milk', 'milk-32', 'kefir', 'ryazhenka', 'cottage-cheese-5', 'cottage-cheese-0', 'greek-yogurt', 'yogurt', 'sour-cream', 'cream', 'cream-cheese', 'mozzarella', 'feta', 'brynza', 'sausages'], allow: [], maxCarbs: null },
+      { id: 'keto', name: 'Кето', emoji: '🥑', categories: ['grains', 'bread'],
+        products: ['sugar', 'honey', 'jam', 'vanilla-sugar', 'potato', 'sweet-potato', 'beet', 'corn-canned', 'peas-canned', 'peas-frozen', 'banana', 'apple', 'orange', 'pear', 'grapes',
+          'mandarin', 'peach', 'plum', 'mango', 'pomegranate', 'kiwi', 'raisins', 'dried-apricots', 'prunes', 'dates', 'orange-juice', 'oat-milk', 'ketchup', 'starch', 'breadcrumbs', 'crab-sticks'],
+        allow: [], maxCarbs: 15 }
+    ];
+    function defaultDiets() { return DEFAULT_DIETS.map(function (d) { var c = U.clone(d); c.builtin = true; return c; }); }
 
     /* Фото по умолчанию: Unsplash (бесплатная лицензия Unsplash) и Wikimedia Commons (свободные лицензии).
        Автор и источник — в подписи под фото, по ссылке — страница фото с лицензией */
@@ -548,7 +632,7 @@
           id: r.id, title: r.title, photo: null, photoId: null, photoUrl: dp ? dp.photoUrl : null, photoCredit: dp ? dp.photoCredit : null, servings: r.servings,
           meals: r.meals.slice(), cuisine: r.cuisine || '', tags: (r.tags || []).slice(),
           ingredients: r.ing.map(function (x) { return { productId: x[0], amount: x[1], unit: x[2] }; }),
-          steps: r.steps.slice(),
+          steps: r.steps.slice(), draft: false,
           createdAt: t0 + i * 3600000, updatedAt: t0 + i * 3600000
         };
       });
@@ -559,14 +643,15 @@
         theme: null,
         profile: { sex: 'female', age: 30, height: 165, weight: 62, activity: 1.375, goal: 'maintain' },
         targets: null, targetsManual: false,
-        restrictions: { excluded: [], moreProtein: false, moreFiber: false },
+        restrictions: { excluded: [], diets: [], moreProtein: false, moreFiber: false },
+        diets: defaultDiets(),
         mealsPerDay: 3, people: 1,
         categories: U.clone(DEFAULT_CATEGORIES)
       };
     }
 
     return { UNITS: UNITS, MEALS: MEALS, DEFAULT_CATEGORIES: DEFAULT_CATEGORIES,
-      buildProducts: buildProducts, buildRecipes: buildRecipes, defaultPhoto: defaultPhoto, LEGACY_DEFAULT_URLS: LEGACY_DEFAULT_URLS, defaultSettings: defaultSettings,
+      buildProducts: buildProducts, buildRecipes: buildRecipes, V17_RECIPE_IDS: V17_RECIPE_IDS, defaultDiets: defaultDiets, defaultPhoto: defaultPhoto, LEGACY_DEFAULT_URLS: LEGACY_DEFAULT_URLS, defaultSettings: defaultSettings,
       mealName: function (id) { var m = MEALS.filter(function (x) { return x.id === id; })[0]; return m ? m.name : id; } };
   })();
   Foodly.Models = Models;
@@ -600,6 +685,12 @@
       if (!s.categories.some(function (c) { return c.id === 'other'; })) s.categories.push({ id: 'other', name: 'Прочее' });
       s.restrictions = s.restrictions || d.restrictions;
       if (!Array.isArray(s.restrictions.excluded)) s.restrictions.excluded = [];
+      // диеты: недостающие встроенные добавляем по id; из выбранных убираем несуществующие
+      if (!Array.isArray(s.diets)) s.diets = Models.defaultDiets();
+      var haveDiet = {}; s.diets.forEach(function (x) { haveDiet[x.id] = true; });
+      Models.defaultDiets().forEach(function (x) { if (!haveDiet[x.id]) s.diets.push(x); });
+      if (!Array.isArray(s.restrictions.diets)) s.restrictions.diets = [];
+      s.restrictions.diets = s.restrictions.diets.filter(function (id) { return s.diets.some(function (x) { return x.id === id; }); });
       s.profile = Object.assign({}, d.profile, s.profile || {});
       if (!s.targets || !(s.targets.kcal > 0)) { s.targets = Nutrition.calcTargets(s.profile); s.targetsManual = false; }
       state.settings = s;
@@ -771,10 +862,41 @@
   Foodly.Nutrition = Nutrition;
 
   /* =======================================================================
+   * Diets — проверка рецептов на соответствие диетам
+   * ======================================================================= */
+  var Diets = (function () {
+    function all() { return (DB.state.settings && DB.state.settings.diets) || []; }
+    function get(id) { return all().filter(function (d) { return d.id === id; })[0] || null; }
+    function excludesProduct(diet, pid) {
+      if (!diet || !pid) return false;
+      if ((diet.allow || []).indexOf(pid) >= 0) return false;
+      if ((diet.products || []).indexOf(pid) >= 0) return true;
+      var p = DB.product(pid); return !!(p && (diet.categories || []).indexOf(p.category) >= 0);
+    }
+    function fits(recipe, diet) {
+      if (!diet) return true;
+      var bad = (recipe.ingredients || []).some(function (i) { return excludesProduct(diet, i.productId); });
+      if (bad) return false;
+      if (diet.maxCarbs != null && diet.maxCarbs !== '') return Nutrition.perServing(recipe).carbs <= Number(diet.maxCarbs);
+      return true;
+    }
+    function fitsAll(recipe, ids) { return (ids || []).every(function (id) { var d = get(id); return !d || fits(recipe, d); }); }
+    /* Диеты, которым рецепт подходит */
+    function matching(recipe) { return all().filter(function (d) { return fits(recipe, d); }); }
+    function label(d) { return (d.emoji ? d.emoji + ' ' : '') + d.name; }
+    function names(ids) { return (ids || []).map(get).filter(Boolean).map(function (d) { return d.name; }); }
+    return { all: all, get: get, excludesProduct: excludesProduct, fits: fits, fitsAll: fitsAll, matching: matching, label: label, names: names };
+  })();
+  Foodly.Diets = Diets;
+
+  /* =======================================================================
    * Recipes — CRUD, поиск, фильтры, фото
    * ======================================================================= */
   var Recipes = (function () {
     function all() { return DB.state.recipes; }
+    /* Готовые рецепты (без черновиков) — только они попадают в поиск, меню и колесо */
+    function ready() { return DB.state.recipes.filter(function (r) { return !r.draft; }); }
+    function drafts() { return DB.state.recipes.filter(function (r) { return r.draft; }).sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); }); }
     function upsert(r) {
       var list = DB.state.recipes;
       r.updatedAt = Date.now();
@@ -796,7 +918,7 @@
     }
     function allTags() {
       var set = {};
-      all().forEach(function (r) {
+      ready().forEach(function (r) {
         (r.tags || []).forEach(function (t) { if (t) set[t] = true; });
         if (r.cuisine) set[r.cuisine] = true;
       });
@@ -806,10 +928,10 @@
       if (!ids || !ids.length) return false;
       return (r.ingredients || []).some(function (i) { return ids.indexOf(i.productId) >= 0; });
     }
-    /* q: {text, meal, tag, kcalMin, kcalMax, badge, sort} */
+    /* q: {text, meal, tag, kcalMin, kcalMax, badge, diets[], sort} */
     function query(q) {
       var text = U.norm(q.text);
-      var res = all().filter(function (r) {
+      var res = ready().filter(function (r) {
         if (text) {
           var hay = U.norm(r.title) + ' ' + (r.ingredients || []).map(function (i) { var p = DB.product(i.productId); return p ? U.norm(p.name) : ''; }).join(' ');
           if (hay.indexOf(text) < 0) return false;
@@ -820,6 +942,7 @@
         if (q.kcalMin != null && !isNaN(q.kcalMin) && ps.kcal < q.kcalMin) return false;
         if (q.kcalMax != null && !isNaN(q.kcalMax) && ps.kcal > q.kcalMax) return false;
         if (q.badge && !Nutrition.badges(ps).some(function (b) { return b.id === q.badge; })) return false;
+        if (q.diets && q.diets.length && !Diets.fitsAll(r, q.diets)) return false;
         return true;
       });
       var sort = q.sort || 'new';
@@ -868,7 +991,7 @@
       if (!emoji) emoji = { breakfast: '🍳', lunch: '🍲', dinner: '🍽️', snack: '🍎' }[meal] || '🍽️';
       return { emoji: emoji, meal: meal };
     }
-    return { all: all, upsert: upsert, remove: remove, restore: restore, allTags: allTags, query: query,
+    return { all: all, ready: ready, drafts: drafts, upsert: upsert, remove: remove, restore: restore, allTags: allTags, query: query,
       containsProduct: containsProduct, compressImage: compressImage, placeholder: placeholder };
   })();
   Foodly.Recipes = Recipes;
@@ -1021,9 +1144,11 @@
 
     function context(cfg) {
       var excluded = (cfg.restrictions && cfg.restrictions.excluded) || [];
+      var diets = (cfg.restrictions && cfg.restrictions.diets) || [];
       var info = {};
-      var allowed = DB.state.recipes.filter(function (r) {
+      var allowed = Recipes.ready().filter(function (r) {
         if (Recipes.containsProduct(r, excluded)) return false;
+        if (!Diets.fitsAll(r, diets)) return false;
         var ps = Nutrition.perServing(r);
         if (!(ps.kcal > 0)) return false;
         var b = Nutrition.badges(ps);
@@ -1137,12 +1262,13 @@
     function warningFor(ctx, best) {
       var msgs = [];
       var relaxedSlots = Object.keys(best.relaxed);
-      if (!ctx.allowed.length) return 'Нет подходящих рецептов. Добавьте рецепты или разрешите больше продуктов в параметрах меню.';
+      if (!ctx.allowed.length) return 'Нет подходящих рецептов. Добавьте рецепты' + ((ctx.cfg.restrictions && (ctx.cfg.restrictions.diets || []).length) ? ', выберите меньше диет' : '') + ' или разрешите больше продуктов в параметрах меню.';
       if (best.dev <= 0.10 && !relaxedSlots.length) return null;
       relaxedSlots.forEach(function (s) {
         var name = Models.mealName(s).toLowerCase();
-        if (best.relaxed[s] === 'tag') msgs.push('нет рецептов для приёма пищи «' + name + '» — отметьте этот приём пищи в подходящих рецептах или разрешите больше продуктов');
-        else msgs.push('на «' + name + '» мало рецептов, поэтому блюда повторяются чаще двух раз в неделю — добавьте рецепты или разрешите больше продуктов');
+        var more = (ctx.cfg.restrictions && (ctx.cfg.restrictions.diets || []).length) ? 'добавьте рецепты под выбранную диету' : 'добавьте рецепты или разрешите больше продуктов';
+        if (best.relaxed[s] === 'tag') msgs.push('нет рецептов для приёма пищи «' + name + '» — отметьте этот приём пищи в подходящих рецептах или ' + more.replace('добавьте', 'добавьте новые'));
+        else msgs.push('на «' + name + '» мало рецептов, поэтому блюда повторяются чаще двух раз в неделю — ' + more);
       });
       if (best.dev > 0.10) {
         var over = best.tot.kcal > ctx.targets.kcal;
@@ -1708,6 +1834,12 @@
             (data.settings.categories || []).forEach(function (c) { if (!ids[c.id]) s.settings.categories.push(c); });
             var ex = s.settings.restrictions.excluded;
             ((data.settings.restrictions || {}).excluded || []).forEach(function (id) { if (ex.indexOf(id) < 0) ex.push(id); });
+            // диеты: добавляем недостающие по id
+            if (Array.isArray(data.settings.diets)) {
+              s.settings.diets = s.settings.diets || [];
+              var dIds = {}; s.settings.diets.forEach(function (x) { dIds[x.id] = true; });
+              data.settings.diets.forEach(function (x) { if (x && x.id && !dIds[x.id]) s.settings.diets.push(x); });
+            }
           }
         }
         DB.ensureIntegrity();
@@ -2024,7 +2156,7 @@
    * UI: Рецепты — список, просмотр, форма
    * ======================================================================= */
   var RecipesView = (function () {
-    var f = { text: '', meal: '', tag: '', badge: '', kcalMin: '', kcalMax: '', sort: 'new' };
+    var f = { text: '', meal: '', tag: '', badge: '', kcalMin: '', kcalMax: '', diets: [], sort: 'new' };
     var root = null;
 
     var VIEWS = [
@@ -2050,6 +2182,9 @@
         '</div></fieldset>' +
         '<button type="button" class="btn btn-ghost btn-sm filters-toggle" aria-expanded="false" aria-controls="rf-more">Фильтры и сортировка</button>' +
         '<div class="filter-row" id="rf-more">' +
+        '<fieldset class="field field-diets"><legend>Диета</legend><div class="chips diet-chips">' +
+        Diets.all().map(function (d) { return '<button type="button" class="chip" data-diet="' + U.esc(d.id) + '" aria-pressed="' + (f.diets.indexOf(d.id) >= 0) + '">' + U.esc(Diets.label(d)) + '</button>'; }).join('') +
+        '</div></fieldset>' +
         '<div class="field"><label for="rf-sort">Сортировка</label><select id="rf-sort">' +
         [['new', 'Сначала новые'], ['title', 'По названию'], ['kcal', 'Сначала менее калорийные'], ['kcal-desc', 'Сначала более калорийные']].map(function (o) {
           return '<option value="' + o[0] + '"' + (f.sort === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
@@ -2068,13 +2203,14 @@
         '<div class="view-switch" role="group" aria-label="Вид списка">' +
         VIEWS.map(function (v) { return '<button type="button" class="icon-btn" data-view="' + v.id + '" aria-pressed="' + (viewMode() === v.id) + '" aria-label="' + v.label + '" title="' + v.label + '">' + v.icon + '</button>'; }).join('') +
         '</div></div>' +
+        '<div class="drafts-box" id="drafts-box" hidden></div>' +
         '<div class="recipe-grid view-' + viewMode() + '" id="recipe-grid"></div></div></div></section>');
 
       $('[data-act="new"]', root).addEventListener('click', function () { openForm(null); });
       $('[data-act="wheel"]', root).addEventListener('click', function () { WheelView.open(); });
-      $('[data-act="wheel"]', root).hidden = !Recipes.all().length;
+      $('[data-act="wheel"]', root).hidden = !Recipes.ready().length;
       $('[data-act="reset"]', root).addEventListener('click', function () {
-        f = { text: '', meal: '', tag: '', badge: '', kcalMin: '', kcalMax: '', sort: 'new' };
+        f = { text: '', meal: '', tag: '', badge: '', kcalMin: '', kcalMax: '', diets: [], sort: 'new' };
         Router.refresh();
         var t = $('#rf-text'); if (t) t.focus();
       });
@@ -2086,7 +2222,7 @@
         });
       });
       var ft = $('.filters-toggle', root);
-      function activeFilters() { return [f.tag, f.badge, f.kcalMin, f.kcalMax].filter(Boolean).length + (f.sort !== 'new' ? 1 : 0); }
+      function activeFilters() { return [f.tag, f.badge, f.kcalMin, f.kcalMax].filter(Boolean).length + f.diets.length + (f.sort !== 'new' ? 1 : 0); }
       function syncToggle() {
         var n = activeFilters();
         ft.textContent = 'Фильтры и сортировка' + (n ? ' (' + n + ')' : '');
@@ -2101,7 +2237,7 @@
       syncToggle();
       root.addEventListener('change', syncToggle);
       root.addEventListener('input', syncToggle);
-      root.addEventListener('click', function (e) { if (e.target.closest('.meal-chips')) syncToggle(); });
+      root.addEventListener('click', function (e) { if (e.target.closest('.meal-chips') || e.target.closest('.diet-chips')) syncToggle(); });
       $('#rf-text', root).addEventListener('input', U.debounce(function (e) { f.text = e.target.value; updateGrid(); syncToggle(); }, 150));
       $$('.meal-chips .chip', root).forEach(function (c) {
         c.addEventListener('click', function () {
@@ -2109,6 +2245,19 @@
           $$('.meal-chips .chip', root).forEach(function (x) { x.setAttribute('aria-pressed', String(x === c)); });
           updateGrid(); syncToggle();
         });
+      });
+      $$('.diet-chips .chip', root).forEach(function (c) {
+        c.addEventListener('click', function () {
+          var id = c.dataset.diet, i = f.diets.indexOf(id);
+          if (i >= 0) f.diets.splice(i, 1); else f.diets.push(id);
+          c.setAttribute('aria-pressed', String(i < 0));
+          updateGrid(); syncToggle();
+        });
+      });
+      $('#drafts-box', root).addEventListener('click', function (e) {
+        var del = e.target.closest('[data-del-draft]');
+        if (del) { deleteDraft(del.dataset.delDraft); return; }
+        var b = e.target.closest('[data-draft]'); if (b) openForm(b.dataset.draft);
       });
       $('#rf-tag', root).addEventListener('change', function (e) { f.tag = e.target.value; updateGrid(); });
       $('#rf-badge', root).addEventListener('change', function (e) { f.badge = e.target.value; updateGrid(); });
@@ -2125,8 +2274,9 @@
     function updateGrid() {
       if (!root) return;
       var grid = $('#recipe-grid', root);
-      var total = Recipes.all().length;
-      var list = Recipes.query({ text: f.text, meal: f.meal, tag: f.tag, badge: f.badge,
+      var total = Recipes.ready().length;
+      renderDrafts();
+      var list = Recipes.query({ text: f.text, meal: f.meal, tag: f.tag, badge: f.badge, diets: f.diets,
         kcalMin: f.kcalMin === '' ? null : U.parseNum(f.kcalMin), kcalMax: f.kcalMax === '' ? null : U.parseNum(f.kcalMax), sort: f.sort });
       $('#recipes-count', root).textContent = total ? (list.length === total ? total + ' ' + U.plural(total, 'рецепт', 'рецепта', 'рецептов') : 'Найдено ' + list.length + ' из ' + total) : '';
       grid.innerHTML = '';
@@ -2139,12 +2289,37 @@
       }
       if (!list.length) {
         grid.appendChild(UI.emptyState({ emoji: '🔍', title: 'Ничего не найдено', text: 'Измените запрос или сбросьте фильтры.', actionLabel: 'Сбросить фильтры', onAction: function () {
-          f = { text: '', meal: '', tag: '', badge: '', kcalMin: '', kcalMax: '', sort: f.sort };
+          f = { text: '', meal: '', tag: '', badge: '', kcalMin: '', kcalMax: '', diets: [], sort: f.sort };
           Router.refresh();
         } }));
         return;
       }
       grid.innerHTML = list.map(cardHtml).join('');
+    }
+    /* ---------- Черновики: отдельный блок над сеткой ---------- */
+    function draftTitle(r) { return (r.title || '').trim() || 'Без названия'; }
+    function renderDrafts() {
+      var box = $('#drafts-box', root); if (!box) return;
+      var list = Recipes.drafts();
+      box.hidden = !list.length;
+      if (!list.length) { box.innerHTML = ''; return; }
+      box.innerHTML = '<h2 class="drafts-title">Черновики <span class="muted">(' + list.length + ')</span></h2>' +
+        '<p class="muted small drafts-hint">Черновики не попадают в поиск, меню и колесо. Откройте черновик, чтобы дописать и сохранить рецепт.</p>' +
+        '<ul class="drafts-list">' + list.map(function (r) {
+          var nIng = (r.ingredients || []).filter(function (i) { return i.productId || (i.name || '').trim(); }).length;
+          var when = r.updatedAt ? new Date(r.updatedAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+          var orig = r.draftOf ? DB.recipe(r.draftOf) : null;
+          return '<li class="draft-item"><button type="button" class="draft-btn" data-draft="' + U.esc(r.id) + '">' +
+            '<span class="draft-emoji" aria-hidden="true">📝</span><span class="draft-text"><span class="draft-name">' + U.esc(draftTitle(r)) + '</span>' +
+            '<span class="muted small">' + (orig ? 'Несохранённые изменения рецепта · ' : '') + nIng + ' ' + U.plural(nIng, 'ингредиент', 'ингредиента', 'ингредиентов') + (when ? ' · изменён ' + U.esc(when) : '') + '</span></span></button>' +
+            '<button type="button" class="icon-btn" data-del-draft="' + U.esc(r.id) + '" aria-label="Удалить черновик «' + U.esc(draftTitle(r)) + '»">✕</button></li>';
+        }).join('') + '</ul>';
+    }
+    function deleteDraft(id) {
+      var r = DB.recipe(id); if (!r) return;
+      var entry = Recipes.remove(id);
+      Router.refresh();
+      UI.toast('Черновик «' + draftTitle(r) + '» удалён', { actionLabel: 'Отменить', onAction: function () { Recipes.restore(entry); Router.refresh(); } });
     }
     function mealPills(r) {
       return (r.meals || []).map(function (m) { return '<span class="meal-pill m-' + m + '">' + U.esc(Models.mealName(m)) + '</span>'; }).join('');
@@ -2166,9 +2341,15 @@
       if (unit === 'щепотка') return U.fmt(amount || 1, 1) + ' ' + U.plural(amount || 1, 'щепотка', 'щепотки', 'щепоток');
       return U.fmt(amount, amount < 10 ? 2 : amount < 100 ? 1 : 0) + ' ' + unit;
     }
+    function dietFitHtml(r) {
+      var m = Diets.matching(r);
+      if (!m.length) return Diets.all().length ? '<p class="diet-fit small muted">Не подходит ни под одну из диет</p>' : '';
+      return '<p class="diet-fit small"><strong>Подходит:</strong> ' + m.map(function (d) { return '<span class="diet-tag">' + U.esc(Diets.label(d)) + '</span>'; }).join(' ') + '</p>';
+    }
     function openRecipe(id) {
       var r = DB.recipe(id);
       if (!r) return;
+      if (r.draft) { openForm(id); return; }
       var ps = Nutrition.perServing(r);
       var portions = r.servings;
       var content = h('<div class="recipe-view">' + UI.mediaHtml(r, 'rv-media') +
@@ -2178,7 +2359,7 @@
           return '<div class="nutri"><span class="nutri-val">' + U.fmt(x[1], x[0] === 'Ккал' ? 0 : 1) + x[2] + '</span><span class="nutri-lbl">' + x[0] + '</span></div>';
         }).join('') + '</div>' + UI.macroBar(ps) +
         '<p class="muted small">На 1 порцию. Рецепт рассчитан на ' + r.servings + ' ' + U.plural(r.servings, 'порцию', 'порции', 'порций') + '.</p>' +
-        '<div class="badges">' + UI.badgesHtml(ps) + '</div>' +
+        '<div class="badges">' + UI.badgesHtml(ps) + '</div>' + dietFitHtml(r) +
         '<div class="rv-section"><div class="rv-ing-head"><h3>Ингредиенты</h3>' +
         '<div class="rv-portions"><span class="muted small" id="rv-portions-lbl">Готовим порций:</span><div class="stepper" role="group" aria-labelledby="rv-portions-lbl"><button type="button" class="icon-btn" data-step="-1" aria-label="Меньше порций">−</button>' +
         '<output class="stepper-val" aria-live="polite"></output><button type="button" class="icon-btn" data-step="1" aria-label="Больше порций">+</button></div></div></div>' +
@@ -2249,13 +2430,25 @@
     function openForm(id) {
       var src = id ? DB.recipe(id) : null;
       var d = src ? U.clone(src) : { id: U.uid('r'), title: '', photo: null, photoId: null, photoUrl: null, servings: 2, meals: [], cuisine: '', tags: [], ingredients: [], steps: [''] };
+      /* Режимы: новый рецепт / черновик (можно «Сохранить черновик») или правка готового рецепта.
+         Черновик с draftOf — несохранённые изменения готового рецепта (создаётся автосохранением). */
+      var isPublished = !!(src && !src.draft);
+      var draftMode = !isPublished;
+      var origOf = src && src.draftOf ? DB.recipe(src.draftOf) : null;
+      var snapshot = src ? U.clone(src) : null;   // для «Не сохранять» после автосохранения
+      var copyId = null;                          // id черновика-копии при правке готового рецепта
+      var autoSaved = false;                      // в этой форме было автосохранение
+      var dirty = false;                          // есть изменения после открытия / последнего явного сохранения
+      var allowClose = false;
+      d.ingredients.forEach(function (i) { if (!i.productId && i.name) i._name = i.name; delete i.name; if (i.amount === 0 && i.unit === 'по вкусу') i.amount = ''; });
       if (!d.ingredients.length) d.ingredients.push({ productId: null, amount: '', unit: 'г' });
       if (!d.steps.length) d.steps.push('');
       var cuisines = {};
-      Recipes.all().forEach(function (r) { if (r.cuisine) cuisines[r.cuisine] = true; });
+      Recipes.ready().forEach(function (r) { if (r.cuisine) cuisines[r.cuisine] = true; });
       var cuisineList = UI.nextId('cuisines');
 
       var form = h('<form class="recipe-form" novalidate>' +
+        (src && src.draft ? '<p class="draft-note small">📝 ' + (origOf ? 'Несохранённые изменения рецепта «' + U.esc(origOf.title) + '». «Сохранить» заменит ими рецепт.' : 'Это черновик: он не попадает в поиск, меню и колесо, пока вы его не сохраните.') + '</p>' : '') +
         '<div class="form-grid">' +
         '<div class="field field-wide"><label for="rf-title">Название <span class="req" aria-hidden="true">*</span></label><input id="rf-title" type="text" required maxlength="120" autofocus></div>' +
         '<div class="field"><label for="rf-servings">Порций <span class="req" aria-hidden="true">*</span></label><input id="rf-servings" type="number" min="1" max="99" step="1" inputmode="numeric" required></div>' +
@@ -2288,7 +2481,6 @@
       var origPhotoId = src ? src.photoId || null : null;
       var newPhotoIds = [];          // фото, созданные в этой форме (удалим, если не понадобятся)
       var photoToken = 0;            // защита от гонок при смене ссылки
-      var saved = false;
       function hasPhoto() { return !!(d.photoId || d.photo || d.photoUrl); }
       function setStatus(t) { $('.photo-status', form).textContent = t || ''; }
       function renderPhoto() {
@@ -2355,9 +2547,10 @@
       renderPhoto();
       /* После сохранения/отмены удаляем фото, которые больше не нужны */
       function cleanupPhotos() {
-        var finalId = saved ? d.photoId : origPhotoId;
-        newPhotoIds.forEach(function (pid) { if (pid !== finalId) PhotoStore.remove(pid); });
-        if (saved && origPhotoId && origPhotoId !== finalId) PhotoStore.remove(origPhotoId);
+        // удаляем только фото, на которые больше не ссылается ни один сохранённый рецепт (в т. ч. черновик)
+        var ref = {};
+        DB.state.recipes.forEach(function (r) { if (r.photoId) ref[r.photoId] = true; });
+        newPhotoIds.concat(origPhotoId ? [origPhotoId] : []).forEach(function (pid) { if (!ref[pid]) PhotoStore.remove(pid); });
       }
 
       /* Ингредиенты */
@@ -2536,7 +2729,7 @@
           onEnd: function (ev) {
             if (ev.oldIndex === ev.newIndex) return;
             var moved = d.steps.splice(ev.oldIndex, 1)[0];
-            d.steps.splice(ev.newIndex, 0, moved);
+            d.steps.splice(ev.newIndex, 0, moved); dirty = true;
             renderSteps();
           }
         });
@@ -2545,7 +2738,7 @@
           if (!S || !document.contains(stepBox)) return;
           S.create(stepBox, { handle: '.drag-handle', animation: 150, onEnd: function (ev) {
             if (ev.oldIndex === ev.newIndex) return;
-            var moved = d.steps.splice(ev.oldIndex, 1)[0]; d.steps.splice(ev.newIndex, 0, moved); renderSteps();
+            var moved = d.steps.splice(ev.oldIndex, 1)[0]; d.steps.splice(ev.newIndex, 0, moved); dirty = true; renderSteps();
           } });
         });
       }
@@ -2566,8 +2759,84 @@
       $$('input[name="meal"]', form).forEach(function (c) { c.addEventListener('change', function () { d.meals = $$('input[name="meal"]:checked', form).map(function (x) { return x.value; }); renderPhoto(); }); });
       updateSummary();
 
-      var foot = h('<div class="btn-row"><button type="button" class="btn btn-ghost" data-close>Отмена</button><button type="submit" class="btn btn-primary" data-a="save">Сохранить</button></div>');
-      var m = UI.modal({ title: src ? 'Редактирование рецепта' : 'Новый рецепт', content: form, footer: foot, size: 'lg', static: true, onClose: cleanupPhotos });
+      var foot = h('<div class="btn-row"><button type="button" class="btn btn-ghost" data-close>Отмена</button>' +
+        (draftMode ? '<button type="button" class="btn btn-secondary" data-a="draft">Сохранить черновик</button>' : '') +
+        '<button type="submit" class="btn btn-primary" data-a="save">Сохранить</button></div>');
+      var m = UI.modal({ title: src && src.draft ? 'Черновик рецепта' : (src ? 'Редактирование рецепта' : 'Новый рецепт'), content: form, footer: foot, size: 'lg', static: true,
+        beforeClose: beforeClose, onClose: function () {
+          document.removeEventListener('visibilitychange', onVisibility);
+          global.removeEventListener('pagehide', autoSave);
+          cleanupPhotos();
+        } });
+
+      /* ---------- Черновики: изменения, автосохранение, закрытие ---------- */
+      function markDirty() { dirty = true; }
+      form.addEventListener('input', markDirty);
+      form.addEventListener('change', markDirty);
+      form.addEventListener('click', function (e) { if (e.target.closest('[data-a="add-ing"], [data-a="del-ing"], [data-a="add-step"], [data-s], [data-a="nophoto"], [data-m="save"]')) markDirty(); });
+      function collect(asDraft) {
+        var n = parseInt($('#rf-servings', form).value, 10);
+        var title = $('#rf-title', form).value.trim();
+        var ings = [];
+        $$('.ing-row', ingBox).forEach(function (row) {
+          var i = row._ing, nm = $('.ing-name input', row).value.trim();
+          var a = i.unit === 'по вкусу' ? 0 : U.parseNum(i.amount);
+          if (i.productId) ings.push({ productId: i.productId, amount: isNaN(a) ? 0 : a, unit: i.unit });
+          else if (asDraft && (nm || (!isNaN(a) && a > 0))) ings.push({ productId: null, name: nm, amount: isNaN(a) ? '' : a, unit: i.unit });
+        });
+        return { title: title, servings: n >= 1 ? Math.min(99, n) : (asDraft ? Number(d.servings) || 2 : n),
+          photo: d.photo || null, photoId: d.photoId || null, photoUrl: d.photoUrl || null, photoCredit: d.photoCredit || null,
+          meals: $$('input[name="meal"]:checked', form).map(function (x) { return x.value; }),
+          cuisine: $('#rf-cuisine', form).value.trim(),
+          tags: $('#rf-tags', form).value.split(',').map(function (x) { return x.trim(); }).filter(Boolean),
+          ingredients: ings,
+          steps: d.steps.map(function (x) { return x.trim(); }).filter(Boolean) };
+      }
+      /* Сохранить как черновик. Для готового рецепта — в отдельную копию (draftOf), сам рецепт не трогаем */
+      function writeDraft() {
+        var base = isPublished ? { id: copyId || (copyId = U.uid('r')), draftOf: src.id, createdAt: Date.now() } : (DB.recipe(d.id) || src || {});
+        var out = Object.assign({}, base, collect(true), { id: isPublished ? copyId : d.id, draft: true });
+        if (isPublished) out.draftOf = src.id;
+        out.createdAt = out.createdAt || Date.now();
+        return Recipes.upsert(out);
+      }
+      function autoSave() {
+        if (!dirty || allowClose) return;
+        if (writeDraft()) autoSaved = true;
+      }
+      function onVisibility() { if (document.visibilityState === 'hidden') autoSave(); }
+      document.addEventListener('visibilitychange', onVisibility);
+      global.addEventListener('pagehide', autoSave);
+      /* «Не сохранять»: откатываем то, что успело записать автосохранение */
+      function discardAutoSaved() {
+        if (!autoSaved) return;
+        if (isPublished) { if (copyId) Recipes.remove(copyId); }
+        else if (snapshot) Recipes.upsert(snapshot);
+        else Recipes.remove(d.id);
+      }
+      function saveDraftAndClose() {
+        if (!writeDraft()) return;
+        allowClose = true; m.close(); Router.refresh();
+        UI.toast('Черновик «' + (collect(true).title || 'Без названия') + '» сохранён');
+      }
+      function beforeClose() {
+        if (allowClose || !dirty) {
+          // закрыли без изменений после автосохранения — ничего не теряем: черновик остаётся
+          return true;
+        }
+        var opts = draftMode
+          ? [{ value: 'draft', label: 'Сохранить черновик', desc: 'Рецепт появится в блоке «Черновики», его можно будет дописать позже', primary: true }]
+          : [{ value: 'save', label: 'Сохранить изменения', desc: 'Проверим поля и обновим рецепт', primary: true }];
+        opts.push({ value: 'discard', label: 'Не сохранять', desc: draftMode && src ? 'Черновик останется таким, каким был до открытия' : 'Изменения будут потеряны' });
+        opts.push({ value: 'continue', label: 'Продолжить редактирование' });
+        UI.choose({ title: 'Сохранить изменения?', options: opts }).then(function (v) {
+          if (v === 'draft') saveDraftAndClose();
+          else if (v === 'save') validateAndSave();
+          else if (v === 'discard') { discardAutoSaved(); allowClose = true; m.close(); Router.refresh(); }
+        });
+        return false;
+      }
+      if (draftMode) foot.querySelector('[data-a="draft"]').addEventListener('click', saveDraftAndClose);
 
       function validateAndSave() {
         var ok = true, firstBad = null;
@@ -2598,23 +2867,19 @@
         if (!filled) { ingErr.hidden = false; ingErr.textContent = 'Добавьте хотя бы один ингредиент'; ok = false; if (!firstBad) firstBad = $('.ing-name input', ingBox); }
         else ingErr.hidden = true;
         if (!ok) { if (firstBad) firstBad.focus(); UI.toast('Проверьте поля формы', { type: 'error', timeout: 2500 }); return; }
-        var rec = src ? src : {};
-        var out = Object.assign({}, rec, {
-          id: d.id, title: t.value.trim(), photo: d.photo || null, photoId: d.photoId || null, photoUrl: d.photoUrl || null, photoCredit: d.photoCredit || null, servings: n,
-          meals: $$('input[name="meal"]:checked', form).map(function (x) { return x.value; }),
-          cuisine: $('#rf-cuisine', form).value.trim(),
-          tags: $('#rf-tags', form).value.split(',').map(function (s) { return s.trim(); }).filter(Boolean),
-          ingredients: d.ingredients.filter(function (i) { return i.productId; }).map(function (i) {
-            return { productId: i.productId, amount: i.unit === 'по вкусу' ? 0 : U.parseNum(i.amount), unit: i.unit };
-          }),
-          steps: d.steps.map(function (s) { return s.trim(); }).filter(Boolean),
-          createdAt: rec.createdAt || Date.now()
-        });
+        // целевой рецепт: для копии-черновика — исходный рецепт (если он ещё есть)
+        var target = origOf || (isPublished ? src : null);
+        var rec = target || DB.recipe(d.id) || src || {};
+        var out = Object.assign({}, rec, collect(false), { id: target ? target.id : d.id, draft: false, createdAt: rec.createdAt || Date.now() });
+        delete out.draftOf;
         if (!Recipes.upsert(out)) return;
-        saved = true;
+        if (copyId) Recipes.remove(copyId);                       // автосохранённая копия больше не нужна
+        if (origOf && src && src.id !== out.id) Recipes.remove(src.id); // открыли копию-черновик — убираем её
+        var wasDraft = !!(src && src.draft);
+        allowClose = true;
         m.close();
         Router.refresh();
-        UI.toast(src ? 'Рецепт сохранён' : 'Рецепт «' + out.title + '» создан');
+        UI.toast(isPublished || origOf ? 'Рецепт сохранён' : 'Рецепт «' + out.title + '» ' + (wasDraft ? 'сохранён — он появился в списке рецептов' : 'создан'));
       }
       foot.querySelector('[data-a="save"]').addEventListener('click', validateAndSave);
       form.addEventListener('submit', function (e) { e.preventDefault(); validateAndSave(); });
@@ -2647,9 +2912,12 @@
       return a;
     }
     function pool() {
-      var ex = state.respectExcluded ? DB.state.settings.restrictions.excluded : [];
-      return Recipes.all().filter(function (r) {
+      var rs = DB.state.settings.restrictions;
+      var ex = state.respectExcluded ? rs.excluded : [];
+      var diets = state.respectExcluded ? (rs.diets || []) : [];
+      return Recipes.ready().filter(function (r) {
         if (state.meal && (r.meals || []).indexOf(state.meal) < 0) return false;
+        if (!Diets.fitsAll(r, diets)) return false;
         return !Recipes.containsProduct(r, ex);
       });
     }
@@ -2695,6 +2963,15 @@
         '<circle cx="160" cy="160" r="26" class="wheel-hub"/><text x="160" y="166" text-anchor="middle" class="wheel-hub-t" font-size="16">🍽️</text></svg>';
     }
 
+    /* Переключатель «учитывать ограничения из меню»: диеты и исключённые продукты */
+    function wheelSwitchHtml() {
+      var rs = DB.state.settings.restrictions, dn = Diets.names(rs.diets), exN = rs.excluded.length;
+      if (!dn.length && !exN) return '';
+      var parts = [];
+      if (dn.length) parts.push((dn.length === 1 ? 'диету «' + dn[0] + '»' : 'диеты: ' + dn.join(', ')));
+      if (exN) parts.push('исключённые продукты');
+      return UI.switchHtml('wh-ex', 'Учитывать ' + parts.join(' и ') + ' из меню', state.respectExcluded);
+    }
     function open() {
       var sectors = [];
       var spinning = false;
@@ -2704,7 +2981,7 @@
         '<button type="button" class="chip" data-meal="">Все</button>' +
         Models.MEALS.map(function (m) { return '<button type="button" class="chip" data-meal="' + m.id + '">' + m.emoji + ' ' + m.name + '</button>'; }).join('') +
         '</div>' +
-        (DB.state.settings.restrictions.excluded.length ? UI.switchHtml('wh-ex', 'Не показывать блюда с исключёнными продуктами', state.respectExcluded) : '') +
+        wheelSwitchHtml() +
         '<p class="wheel-now" aria-hidden="true"><span class="wn-emoji">❔</span><span class="wn-title">Крутите колесо — блюдо откроется здесь</span></p>' +
         '<div class="wheel-stage"><div class="wheel-pointer" aria-hidden="true"></div><div class="wheel-box"></div></div>' +
         '<p class="wheel-note muted small" aria-live="polite"></p>' +
@@ -3071,6 +3348,11 @@
         [[3, '3 — завтрак, обед, ужин'], [4, '4 — плюс перекус'], [5, '5 — плюс два перекуса']].map(function (o) { return '<option value="' + o[0] + '"' + (s.mealsPerDay === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
         '<div class="field"><label for="pp-start">Первый день меню</label><input id="pp-start" type="date" value="' + U.esc(s.planStart || U.todayISO()) + '"></div></div>' +
         numField('pp-people', 'Сколько человек будут есть', s.people, '', 'Калории считаются на одного человека, а продукты в списке покупок — на всех.') +
+        '<fieldset class="field field-diets"><legend>Диета</legend>' +
+        '<p class="field-hint small muted" id="pp-diets-hint">В меню попадут только блюда, подходящие под все выбранные диеты.</p>' +
+        '<div class="chips diet-chips" id="pp-diets" aria-describedby="pp-diets-hint">' +
+        Diets.all().map(function (d) { return '<button type="button" class="chip" data-diet="' + U.esc(d.id) + '" aria-pressed="' + (s.restrictions.diets.indexOf(d.id) >= 0) + '">' + U.esc(Diets.label(d)) + '</button>'; }).join('') +
+        '</div><p class="small muted diet-count" id="pp-diets-count" aria-live="polite"></p></fieldset>' +
         '<div class="field"><label for="ex-input">Не использовать продукты</label><input id="ex-input" type="text" placeholder="Например, яйцо — блюда с ним не попадут в меню"></div>' +
         '<ul class="chip-list" id="ex-list" aria-label="Продукты, которые не используем"></ul>' +
         '<div class="switch-col">' + UI.switchHtml('sw-protein', 'Чаще предлагать блюда с высоким содержанием белка', s.restrictions.moreProtein) +
@@ -3110,12 +3392,12 @@
           UI.fieldError(inp, null);
           S().targets[inp.id.slice(3)] = Math.round(v);
           S().targetsManual = true;
-          DB.save('settings'); changed();
+          DB.save('settings'); changed(); updateDietCount();
         });
       });
       $('[data-a="recalc"]', root).addEventListener('click', function () {
         S().targetsManual = false; S().targets = Nutrition.calcTargets(S().profile);
-        DB.save('settings'); fillTargets(); changed();
+        DB.save('settings'); fillTargets(); changed(); updateDietCount();
         UI.toast('Норма рассчитана заново: ' + S().targets.kcal + ' ккал в день');
       });
       var exIn = $('#ex-input', root);
@@ -3124,7 +3406,7 @@
         onPick: function (it) {
           S().restrictions.excluded.push(it.id); exIn.value = '';
           DB.save('settings'); renderExcluded(); changed();
-          var n = Recipes.all().filter(function (r) { return Recipes.containsProduct(r, [it.id]); }).length;
+          var n = Recipes.ready().filter(function (r) { return Recipes.containsProduct(r, [it.id]); }).length;
           UI.toast('«' + it.label + '» не используем' + (n ? ': ' + n + ' ' + U.plural(n, 'рецепт не попадёт', 'рецепта не попадут', 'рецептов не попадут') + ' в меню' : ''));
         }
       });
@@ -3135,6 +3417,7 @@
           var pr = DB.product(id);
           return '<li class="chip chip-removable"><span>' + U.esc(pr ? pr.name : id) + '</span><button type="button" class="chip-x" data-ex="' + U.esc(id) + '" aria-label="Снова использовать ' + U.esc(pr ? pr.name : id) + '">✕</button></li>';
         }).join('') : '<li class="muted small">Все продукты разрешены</li>';
+        updateDietCount();
       }
       $('#ex-list', root).addEventListener('click', function (e) {
         var b = e.target.closest('[data-ex]'); if (!b) return;
@@ -3142,6 +3425,25 @@
         DB.save('settings'); renderExcluded(); changed(); exIn.focus();
       });
       renderExcluded();
+      function updateDietCount() {
+        var el = $('#pp-diets-count', root), ids = S().restrictions.diets;
+        if (!ids.length) { el.textContent = ''; return; }
+        var ex = S().restrictions.excluded;
+        var n = Recipes.ready().filter(function (r) { return Diets.fitsAll(r, ids) && !Recipes.containsProduct(r, ex); }).length;
+        var txt = n ? 'Подходящих рецептов: ' + n + '.' + (n < 8 ? ' Этого мало для разнообразного меню — блюда будут повторяться.' : '') : 'Нет рецептов, подходящих под все выбранные диеты.';
+        // низкоуглеводная диета, а дневная норма углеводов обычная — подскажем поправить норму
+        var lowCarb = ids.map(Diets.get).filter(function (d) { return d && d.maxCarbs != null && d.maxCarbs !== ''; })[0];
+        if (lowCarb && S().targets.carbs > lowCarb.maxCarbs * (S().mealsPerDay || 3)) txt += ' Для диеты «' + lowCarb.name + '» снизьте норму углеводов выше (например, до ' + lowCarb.maxCarbs * (S().mealsPerDay || 3) + ' г), а освободившиеся калории перенесите в жиры.';
+        el.textContent = txt;
+      }
+      $('#pp-diets', root).addEventListener('click', function (e) {
+        var c = e.target.closest('[data-diet]'); if (!c) return;
+        var ids = S().restrictions.diets, i = ids.indexOf(c.dataset.diet);
+        if (i >= 0) ids.splice(i, 1); else ids.push(c.dataset.diet);
+        c.setAttribute('aria-pressed', String(i < 0));
+        DB.save('settings'); updateDietCount(); changed();
+      });
+      updateDietCount();
       [['#sw-protein', 'moreProtein'], ['#sw-fiber', 'moreFiber']].forEach(function (x) {
         var sw = $(x[0], root);
         sw.addEventListener('click', function () {
@@ -3150,7 +3452,7 @@
           S().restrictions[x[1]] = v; DB.save('settings'); changed();
         });
       });
-      $('#pp-meals', root).addEventListener('change', function (e) { S().mealsPerDay = Number(e.target.value); DB.save('settings'); changed(); });
+      $('#pp-meals', root).addEventListener('change', function (e) { S().mealsPerDay = Number(e.target.value); DB.save('settings'); changed(); updateDietCount(); });
       $('#pp-people', root).addEventListener('change', function (e) {
         var v = parseInt(e.target.value, 10);
         if (!(v >= 1 && v <= 20)) { UI.fieldError(e.target, 'От 1 до 20 человек'); return; }
@@ -3183,6 +3485,7 @@
         '<p class="muted">Белки ' + t.protein + ' г, жиры ' + t.fat + ' г, углеводы ' + t.carbs + ' г</p>' +
         '<ul class="facts"><li>' + s.mealsPerDay + ' ' + U.plural(s.mealsPerDay, 'приём', 'приёма', 'приёмов') + ' пищи в день</li>' +
         '<li>Продукты на ' + s.people + ' ' + peopleWord(s.people) + '</li>' +
+        (Diets.names(s.restrictions.diets).length ? '<li>Диета: ' + U.esc(Diets.names(s.restrictions.diets).join(', ')) + '</li>' : '') +
         (exNames.length ? '<li>Без: ' + U.esc(exNames.slice(0, 3).join(', ')) + (exNames.length > 3 ? ' и ещё ' + (exNames.length - 3) : '') + '</li>' : '') + '</ul>';
       $('[data-a="generate"]', root).textContent = DB.state.plan ? 'Составить новое меню' : 'Составить меню на неделю';
     }
@@ -3196,7 +3499,7 @@
       if (n) n.hidden = !cfgChanged();
     }
     function generate() {
-      if (!Recipes.all().length) { UI.toast('Сначала добавьте рецепты', { type: 'error' }); return; }
+      if (!Recipes.ready().length) { UI.toast('Сначала добавьте рецепты', { type: 'error' }); return; }
       var start = ($('#pp-start', root) && $('#pp-start', root).value) || U.todayISO();
       var had = !!DB.state.plan;
       var plan = Planner.generate(S(), start);
@@ -3562,7 +3865,7 @@
         if (del) {
           var p = DB.product(del.dataset.delp);
           var inRecipes = Recipes.all().filter(function (r) { return Recipes.containsProduct(r, [p.id]); });
-          UI.confirm({ title: 'Удалить «' + p.name + '»?', text: inRecipes.length ? 'Продукт используется в ' + inRecipes.length + ' ' + U.plural(inRecipes.length, 'рецепте', 'рецептах', 'рецептах') + ': ' + inRecipes.slice(0, 3).map(function (r) { return r.title; }).join(', ') + '. Там он останется без КБЖУ.' : 'Продукт будет удалён из справочника.', okText: 'Удалить', danger: true }).then(function (yes) {
+          UI.confirm({ title: 'Удалить «' + p.name + '»?', text: inRecipes.length ? 'Продукт используется в ' + inRecipes.length + ' ' + U.plural(inRecipes.length, 'рецепте', 'рецептах', 'рецептах') + ': ' + inRecipes.slice(0, 3).map(function (r) { return r.title || 'Без названия'; }).join(', ') + '. Там он останется без КБЖУ.' : 'Продукт будет удалён из справочника.', okText: 'Удалить', danger: true }).then(function (yes) {
             if (!yes) return;
             var i = DB.state.products.indexOf(p);
             DB.state.products.splice(i, 1); DB.save('products'); renderProducts();
