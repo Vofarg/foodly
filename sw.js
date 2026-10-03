@@ -1,6 +1,6 @@
 /* Foodly! — сервис-воркер: precache оболочки + stale-while-revalidate для CDN */
 'use strict';
-var VERSION = 'foodly-v1.7.0';
+var VERSION = 'foodly-v1.8.0';
 var PRECACHE = VERSION + '-precache';
 var RUNTIME = VERSION + '-runtime';
 var IMAGES = 'foodly-images';        // фото по ссылкам: не версионируется, чтобы не терять их при обновлении

@@ -736,3 +736,6 @@ select { appearance: none; -webkit-appearance: none; padding-right: 34px; backgr
 .diet-fit { margin: 10px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .diet-tag { display: inline-flex; padding: 3px 10px; border-radius: 999px; background: var(--mint-soft); color: var(--text); font-size: .8125rem; }
 .filter-row .field-diets { grid-column: 1 / -1; }
+.macro-pct { margin: 8px 0 0; }
+.keto-day { margin: 4px 0 8px; color: var(--accent-text); font-weight: 500; }
+.keto-day.is-off { color: var(--warn); }

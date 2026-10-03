@@ -80,7 +80,7 @@
    * ======================================================================= */
   var Storage = (function () {
     var NS = 'foodly:v1:';
-    var SCHEMA_VERSION = 7;
+    var SCHEMA_VERSION = 8;
     var onError = function () {};
     var readErrors = 0;
 
@@ -184,6 +184,27 @@
             if (M.V17_RECIPE_IDS.indexOf(r.id) >= 0 && !have[r.id]) { r.draft = false; r.createdAt = r.updatedAt = Date.now(); data.recipes.push(r); }
           });
         }
+        return data;
+      },
+      // v7 -> v8: кето по долям калорий (жиры ≥ 60%, углеводы ≤ 10%) вместо «≤ 15 г углеводов на порцию»;
+      // кето-версии пяти демо-рецептов (если пользователь их не менял) и 6 новых кето-рецептов
+      7: function (data) {
+        var M = Foodly.Models; if (!M) return data;
+        ((data.settings && data.settings.diets) || []).forEach(function (d) { if (d.builtin && d.id === 'keto') Object.assign(d, U.clone(M.KETO_RULES)); });
+        data.recipes = data.recipes || [];
+        var fresh = {}; M.buildRecipes().forEach(function (r) { fresh[r.id] = r; });
+        var have = {};
+        data.recipes.forEach(function (r) {
+          have[r.id] = true;
+          var f = fresh[r.id];
+          if (f && M.V18_UPDATED_IDS.indexOf(r.id) >= 0 && !r.draft && r.updatedAt === r.createdAt) {
+            ['title', 'servings', 'meals', 'tags', 'cuisine', 'ingredients', 'steps'].forEach(function (k) { r[k] = U.clone(f[k]); });
+          }
+        });
+        M.V18_RECIPE_IDS.forEach(function (id) {
+          if (have[id] || !fresh[id]) return;
+          var r = fresh[id]; r.draft = false; r.createdAt = r.updatedAt = Date.now(); data.recipes.push(r);
+        });
         return data;
       }
     };
@@ -522,12 +543,12 @@
       { id: 'r-keto-eggs', title: 'Яичница с беконом и авокадо', servings: 1, meals: ['breakfast'], cuisine: 'Европейская', tags: ['яйца', 'быстро'],
         ing: [['egg', 3, 'шт'], ['bacon', 2, 'шт'], ['avocado', 0.5, 'шт'], ['butter', 5, 'г'], ['salt', 0, 'по вкусу'], ['black-pepper', 1, 'щепотка']],
         steps: ['Обжарьте бекон на сухой сковороде до хруста, переложите на тарелку.', 'Растопите сливочное масло в той же сковороде и разбейте яйца.', 'Жарьте 3–4 минуты, посолите и поперчите.', 'Подавайте с беконом и ломтиками авокадо.'] },
-      { id: 'r-tuna-salad', title: 'Салат с тунцом, яйцом и огурцом', servings: 2, meals: ['lunch', 'dinner'], cuisine: 'Домашняя', tags: ['салат', 'рыба', 'быстро'],
-        ing: [['tuna-canned', 1, 'шт'], ['egg', 2, 'шт'], ['cucumber', 1, 'шт'], ['lettuce', 80, 'г'], ['olive-oil', 1, 'ст. л.'], ['mayo', 1, 'ст. л.'], ['salt', 0, 'по вкусу']],
-        steps: ['Сварите яйца вкрутую (9 минут), остудите и нарежьте.', 'Нарежьте огурец, порвите листья салата.', 'Слейте жидкость с тунца и разберите его вилкой.', 'Смешайте всё, заправьте оливковым маслом и майонезом, посолите.'] },
-      { id: 'r-chicken-thighs-veg', title: 'Куриные бёдра с кабачком и перцем', servings: 3, meals: ['dinner', 'lunch'], cuisine: 'Домашняя', tags: ['курица', 'духовка'],
-        ing: [['chicken-thigh', 600, 'г'], ['zucchini', 1, 'шт'], ['bell-pepper', 1, 'шт'], ['olive-oil', 2, 'ст. л.'], ['garlic', 2, 'шт'], ['paprika', 1, 'ч. л.'], ['salt', 0, 'по вкусу']],
-        steps: ['Разогрейте духовку до 200 °C.', 'Натрите бёдра паприкой, солью и рубленым чесноком.', 'Нарежьте кабачок и перец крупными кусками, смешайте с маслом.', 'Выложите всё на противень и запекайте 30–35 минут.'] },
+      { id: 'r-tuna-salad', title: 'Салат с тунцом, авокадо и яйцом', servings: 2, meals: ['lunch', 'dinner'], cuisine: 'Домашняя', tags: ['салат', 'рыба', 'быстро'],
+        ing: [['tuna-canned', 1, 'шт'], ['egg', 2, 'шт'], ['avocado', 1, 'шт'], ['cucumber', 1, 'шт'], ['lettuce', 60, 'г'], ['olive-oil', 2, 'ст. л.'], ['mayo', 1, 'ст. л.'], ['salt', 0, 'по вкусу']],
+        steps: ['Сварите яйца вкрутую (9 минут), остудите и нарежьте.', 'Нарежьте огурец и авокадо, порвите листья салата.', 'Слейте жидкость с тунца и разберите его вилкой.', 'Смешайте всё, заправьте оливковым маслом и майонезом, посолите.'] },
+      { id: 'r-chicken-thighs-veg', title: 'Куриные бёдра с кабачком под сыром', servings: 3, meals: ['dinner', 'lunch'], cuisine: 'Домашняя', tags: ['курица', 'духовка'],
+        ing: [['chicken-thigh', 600, 'г'], ['zucchini', 1, 'шт'], ['bell-pepper', 0.5, 'шт'], ['olive-oil', 4, 'ст. л.'], ['cheese', 60, 'г'], ['garlic', 2, 'шт'], ['paprika', 1, 'ч. л.'], ['salt', 0, 'по вкусу']],
+        steps: ['Разогрейте духовку до 200 °C.', 'Натрите бёдра паприкой, солью и рубленым чесноком.', 'Нарежьте кабачок и перец крупными кусками, смешайте с маслом.', 'Выложите всё на противень и запекайте 25 минут.', 'Посыпьте тёртым сыром и запекайте ещё 7–10 минут.'] },
       { id: 'r-cheese-nuts', title: 'Сыр с грецкими орехами', servings: 1, meals: ['snack'], cuisine: 'Домашняя', tags: ['без готовки', 'быстро'],
         ing: [['cheese', 40, 'г'], ['walnuts', 15, 'г']], steps: ['Нарежьте сыр кубиками.', 'Подавайте с грецкими орехами.'] },
       { id: 'r-chickpea-curry', title: 'Карри из нута со шпинатом и рисом', servings: 4, meals: ['lunch', 'dinner'], cuisine: 'Индийская', tags: ['постное', 'бобовые'],
@@ -551,27 +572,49 @@
       { id: 'r-spinach-feta-omelet', title: 'Омлет со шпинатом и фетой', servings: 1, meals: ['breakfast'], cuisine: 'Европейская', tags: ['яйца', 'быстро'],
         ing: [['egg', 3, 'шт'], ['spinach', 50, 'г'], ['feta', 30, 'г'], ['butter', 5, 'г'], ['salt', 0, 'по вкусу']],
         steps: ['Взбейте яйца со щепоткой соли.', 'Растопите масло, обжарьте шпинат 1 минуту.', 'Залейте яйцами, посыпьте раскрошенной фетой.', 'Готовьте под крышкой 4–5 минут на слабом огне.'] },
-      { id: 'r-pork-cauliflower', title: 'Свинина с цветной капустой в духовке', servings: 3, meals: ['lunch', 'dinner'], cuisine: 'Домашняя', tags: ['духовка'],
-        ing: [['pork', 450, 'г'], ['cauliflower', 400, 'г'], ['garlic', 3, 'шт'], ['olive-oil', 2, 'ст. л.'], ['herbs', 1, 'ч. л.'], ['salt', 0, 'по вкусу'], ['black-pepper', 1, 'щепотка']],
-        steps: ['Разогрейте духовку до 200 °C.', 'Нарежьте свинину кусками, натрите солью, перцем, травами и чесноком.', 'Разберите капусту на соцветия и смешайте с маслом.', 'Выложите на противень и запекайте 35 минут, перемешав в середине.'] },
+      { id: 'r-pork-cauliflower', title: 'Свинина с цветной капустой под сыром', servings: 3, meals: ['lunch', 'dinner'], cuisine: 'Домашняя', tags: ['духовка'],
+        ing: [['pork', 450, 'г'], ['cauliflower', 300, 'г'], ['butter', 40, 'г'], ['cheese', 80, 'г'], ['garlic', 3, 'шт'], ['olive-oil', 1, 'ст. л.'], ['herbs', 1, 'ч. л.'], ['salt', 0, 'по вкусу'], ['black-pepper', 1, 'щепотка']],
+        steps: ['Разогрейте духовку до 200 °C.', 'Нарежьте свинину кусками, натрите солью, перцем, травами и чесноком.', 'Разберите капусту на соцветия, смешайте с маслом и растопленным сливочным маслом.', 'Запекайте 30 минут, затем посыпьте сыром и запекайте ещё 7 минут.'] },
       { id: 'r-chicken-broccoli-soup', title: 'Куриный суп с брокколи и шпинатом', servings: 4, meals: ['lunch'], cuisine: 'Домашняя', tags: ['суп', 'курица'],
         ing: [['chicken-breast', 350, 'г'], ['broccoli', 300, 'г'], ['spinach', 80, 'г'], ['onion', 0.5, 'шт'], ['water', 1500, 'мл'], ['bay-leaf', 1, 'шт'], ['salt', 0, 'по вкусу']],
         steps: ['Залейте курицу водой, добавьте лук и лавровый лист, варите 25 минут.', 'Выньте курицу, нарежьте кусочками и верните в бульон.', 'Добавьте соцветия брокколи и варите 7 минут.', 'Вмешайте шпинат, посолите и выключите огонь.'] },
-      { id: 'r-garlic-shrimp-zucchini', title: 'Креветки с чесноком и кабачком', servings: 2, meals: ['dinner', 'lunch'], cuisine: 'Средиземноморская', tags: ['морепродукты', 'быстро'],
-        ing: [['shrimp', 350, 'г'], ['zucchini', 2, 'шт'], ['garlic', 3, 'шт'], ['butter', 15, 'г'], ['olive-oil', 1, 'ст. л.'], ['lemon', 1, 'ст. л.'], ['parsley', 1, 'ст. л.'], ['salt', 0, 'по вкусу']],
-        steps: ['Нарежьте кабачки полукружиями и обжарьте на оливковом масле 5 минут.', 'Добавьте сливочное масло и рубленый чеснок.', 'Выложите креветки и прогрейте 3 минуты.', 'Сбрызните лимонным соком, посолите и посыпьте петрушкой.'] },
+      { id: 'r-garlic-shrimp-zucchini', title: 'Креветки в чесночном масле с кабачком', servings: 2, meals: ['dinner', 'lunch'], cuisine: 'Средиземноморская', tags: ['морепродукты', 'быстро'],
+        ing: [['shrimp', 300, 'г'], ['zucchini', 1, 'шт'], ['garlic', 3, 'шт'], ['butter', 30, 'г'], ['olive-oil', 2, 'ст. л.'], ['lemon', 1, 'ч. л.'], ['parsley', 1, 'ст. л.'], ['salt', 0, 'по вкусу']],
+        steps: ['Нарежьте кабачок полукружиями и обжарьте на оливковом масле 5 минут.', 'Добавьте сливочное масло и рубленый чеснок.', 'Выложите креветки и прогрейте 3 минуты.', 'Сбрызните лимонным соком, посолите и посыпьте петрушкой.'] },
       { id: 'r-stuffed-eggs', title: 'Яйца, фаршированные тунцом', servings: 2, meals: ['snack'], cuisine: 'Домашняя', tags: ['яйца', 'закуска'],
-        ing: [['egg', 4, 'шт'], ['tuna-canned', 0.5, 'шт'], ['mayo', 1, 'ст. л.'], ['dill', 1, 'ст. л.'], ['salt', 0, 'по вкусу']],
+        ing: [['egg', 4, 'шт'], ['tuna-canned', 0.5, 'шт'], ['mayo', 2, 'ст. л.'], ['dill', 1, 'ст. л.'], ['salt', 0, 'по вкусу']],
         steps: ['Сварите яйца вкрутую (9 минут), остудите и разрежьте пополам.', 'Достаньте желтки и разомните их с тунцом и майонезом.', 'Наполните белки начинкой и посыпьте укропом.'] },
       { id: 'r-tofu-rice', title: 'Рис с овощами и тофу', servings: 3, meals: ['lunch', 'dinner'], cuisine: 'Азиатская', tags: ['постное', 'вок'],
         ing: [['rice', 180, 'г'], ['tofu', 250, 'г'], ['veg-mix', 400, 'г'], ['soy-sauce', 2, 'ст. л.'], ['sunflower-oil', 2, 'ст. л.'], ['garlic', 2, 'шт'], ['ginger', 1, 'ч. л.']],
         steps: ['Отварите рис.', 'Нарежьте тофу кубиками и обжарьте на половине масла до корочки, переложите.', 'На оставшемся масле обжарьте чеснок, имбирь и овощную смесь 6–7 минут.', 'Добавьте рис, тофу и соевый соус, перемешайте и прогрейте 2 минуты.'] },
       { id: 'r-pumpkin-soup', title: 'Суп-пюре из тыквы на кокосовом молоке', servings: 4, meals: ['lunch', 'dinner'], cuisine: 'Домашняя', tags: ['суп', 'постное'],
         ing: [['pumpkin', 600, 'г'], ['coconut-milk', 200, 'мл'], ['onion', 1, 'шт'], ['carrot', 1, 'шт'], ['ginger', 1, 'ч. л.'], ['olive-oil', 1, 'ст. л.'], ['water', 500, 'мл'], ['pumpkin-seeds', 20, 'г'], ['salt', 0, 'по вкусу']],
-        steps: ['Нарежьте тыкву, лук и морковь кубиками.', 'Обжарьте лук и морковь на масле 5 минут, добавьте имбирь.', 'Добавьте тыкву и воду, варите 20 минут до мягкости.', 'Влейте кокосовое молоко, пробейте блендером и посолите.', 'Подавайте с тыквенными семечками.'] }
+        steps: ['Нарежьте тыкву, лук и морковь кубиками.', 'Обжарьте лук и морковь на масле 5 минут, добавьте имбирь.', 'Добавьте тыкву и воду, варите 20 минут до мягкости.', 'Влейте кокосовое молоко, пробейте блендером и посолите.', 'Подавайте с тыквенными семечками.'] },
+      // ---- Добавлены в v1.8: кето (жиры 60–85% калорий, углеводы ≤ 10%) ----
+      { id: 'r-keto-salmon-scramble', title: 'Скрэмбл со сливочным сыром и сёмгой', servings: 1, meals: ['breakfast'], cuisine: 'Европейская', tags: ['яйца', 'быстро'],
+        ing: [['egg', 3, 'шт'], ['cream-cheese', 30, 'г'], ['salmon-salted', 40, 'г'], ['butter', 10, 'г'], ['dill', 1, 'ч. л.'], ['salt', 0, 'по вкусу']],
+        steps: ['Взбейте яйца со сливочным сыром.', 'Растопите масло, вылейте яйца и помешивайте лопаткой на слабом огне 2–3 минуты.', 'Снимите с огня, пока яйца ещё влажные.', 'Подавайте с ломтиками сёмги и укропом.'] },
+      { id: 'r-keto-creamy-chicken', title: 'Куриные бёдра в сливочном соусе со шпинатом', servings: 3, meals: ['lunch', 'dinner'], cuisine: 'Европейская', tags: ['курица', 'соус'],
+        ing: [['chicken-thigh', 450, 'г'], ['cream', 200, 'мл'], ['butter', 30, 'г'], ['spinach', 100, 'г'], ['parmesan', 30, 'г'], ['garlic', 2, 'шт'], ['salt', 0, 'по вкусу']],
+        steps: ['Обжарьте бёдра на сливочном масле по 5 минут с каждой стороны, переложите.', 'В той же сковороде прогрейте чеснок, влейте сливки и добавьте тёртый пармезан.', 'Верните курицу и тушите 10 минут под крышкой.', 'Вмешайте шпинат, посолите и прогрейте ещё 2 минуты.'] },
+      { id: 'r-keto-mackerel', title: 'Скумбрия, запечённая с маслом и травами', servings: 3, meals: ['dinner', 'lunch'], cuisine: 'Домашняя', tags: ['рыба', 'духовка'],
+        ing: [['mackerel', 600, 'г'], ['butter', 30, 'г'], ['lemon', 1, 'ст. л.'], ['herbs', 1, 'ч. л.'], ['arugula', 60, 'г'], ['olive-oil', 1, 'ст. л.'], ['salt', 0, 'по вкусу']],
+        steps: ['Разогрейте духовку до 200 °C.', 'Посолите рыбу, натрите травами, внутрь положите кусочки сливочного масла.', 'Запекайте 20–25 минут.', 'Подавайте с рукколой, заправленной маслом и лимонным соком.'] },
+      { id: 'r-keto-avocado-bacon', title: 'Салат с авокадо, беконом и яйцом', servings: 2, meals: ['lunch', 'dinner'], cuisine: 'Европейская', tags: ['салат', 'быстро'],
+        ing: [['avocado', 1, 'шт'], ['bacon', 4, 'шт'], ['egg', 2, 'шт'], ['lettuce', 60, 'г'], ['olive-oil', 1, 'ст. л.'], ['lemon', 1, 'ч. л.'], ['salt', 0, 'по вкусу']],
+        steps: ['Сварите яйца (8 минут) и обжарьте бекон до хруста.', 'Нарежьте авокадо, яйца и бекон.', 'Выложите на листья салата.', 'Заправьте оливковым маслом и лимонным соком, посолите.'] },
+      { id: 'r-keto-burger', title: 'Говяжьи котлеты с сыром без булки', servings: 3, meals: ['lunch', 'dinner'], cuisine: 'Американская', tags: ['говядина'],
+        ing: [['ground-beef', 500, 'г'], ['cheese', 60, 'г'], ['pickles', 3, 'шт'], ['lettuce', 60, 'г'], ['mayo', 1, 'ст. л.'], ['olive-oil', 1, 'ст. л.'], ['salt', 0, 'по вкусу'], ['black-pepper', 1, 'щепотка']],
+        steps: ['Посолите и поперчите фарш, сформируйте 6 котлет.', 'Обжарьте на масле по 4 минуты с каждой стороны.', 'Положите на котлеты ломтики сыра и накройте крышкой на 1 минуту.', 'Подавайте на листьях салата с маринованными огурцами и майонезом.'] },
+      { id: 'r-keto-avocado-salmon', title: 'Авокадо со слабосолёной сёмгой', servings: 2, meals: ['snack', 'breakfast'], cuisine: 'Домашняя', tags: ['без готовки', 'быстро'],
+        ing: [['avocado', 1, 'шт'], ['salmon-salted', 80, 'г'], ['lemon', 1, 'ч. л.'], ['black-pepper', 1, 'щепотка']],
+        steps: ['Разрежьте авокадо пополам и удалите косточку.', 'Сбрызните лимонным соком и поперчите.', 'Подавайте с ломтиками сёмги.'] }
     ];
     var V17_RECIPE_IDS = ['r-keto-eggs', 'r-tuna-salad', 'r-chicken-thighs-veg', 'r-cheese-nuts', 'r-chickpea-curry', 'r-oat-chia', 'r-tofu-scramble', 'r-millet-pumpkin',
       'r-bean-stew', 'r-quinoa-salad', 'r-spinach-feta-omelet', 'r-pork-cauliflower', 'r-chicken-broccoli-soup', 'r-garlic-shrimp-zucchini', 'r-stuffed-eggs', 'r-tofu-rice', 'r-pumpkin-soup'];
+    var V18_RECIPE_IDS = ['r-keto-salmon-scramble', 'r-keto-creamy-chicken', 'r-keto-mackerel', 'r-keto-avocado-bacon', 'r-keto-burger', 'r-keto-avocado-salmon'];
+    /* Рецепты, переделанные в v1.8 в кето-версии: обновляем у пользователя, если он их не менял */
+    var V18_UPDATED_IDS = ['r-tuna-salad', 'r-chicken-thighs-veg', 'r-pork-cauliflower', 'r-garlic-shrimp-zucchini', 'r-stuffed-eggs'];
 
     /* Встроенные диеты. Диета = исключённые категории + отдельные продукты − исключения (allow) + необязательный лимит углеводов на порцию.
        Новый продукт в исключённой категории исключается автоматически. */
@@ -585,8 +628,10 @@
       { id: 'keto', name: 'Кето', emoji: '🥑', categories: ['grains', 'bread'],
         products: ['sugar', 'honey', 'jam', 'vanilla-sugar', 'potato', 'sweet-potato', 'beet', 'corn-canned', 'peas-canned', 'peas-frozen', 'banana', 'apple', 'orange', 'pear', 'grapes',
           'mandarin', 'peach', 'plum', 'mango', 'pomegranate', 'kiwi', 'raisins', 'dried-apricots', 'prunes', 'dates', 'orange-juice', 'oat-milk', 'ketchup', 'starch', 'breadcrumbs', 'crab-sticks'],
-        allow: [], maxCarbs: 15 }
+        allow: [], maxCarbs: null, maxCarbsPct: 10, minFatPct: 60, macro: 'keto' }
     ];
+    /* Кето в v1.8: вместо «≤ 15 г углеводов на порцию» — доли калорий (не зависят от размера порции) и своя норма КБЖУ */
+    var KETO_RULES = { maxCarbs: null, maxCarbsPct: 10, minFatPct: 60, macro: 'keto' };
     function defaultDiets() { return DEFAULT_DIETS.map(function (d) { var c = U.clone(d); c.builtin = true; return c; }); }
 
     /* Фото по умолчанию: Unsplash (бесплатная лицензия Unsplash) и Wikimedia Commons (свободные лицензии).
@@ -651,7 +696,7 @@
     }
 
     return { UNITS: UNITS, MEALS: MEALS, DEFAULT_CATEGORIES: DEFAULT_CATEGORIES,
-      buildProducts: buildProducts, buildRecipes: buildRecipes, V17_RECIPE_IDS: V17_RECIPE_IDS, defaultDiets: defaultDiets, defaultPhoto: defaultPhoto, LEGACY_DEFAULT_URLS: LEGACY_DEFAULT_URLS, defaultSettings: defaultSettings,
+      buildProducts: buildProducts, buildRecipes: buildRecipes, V17_RECIPE_IDS: V17_RECIPE_IDS, V18_RECIPE_IDS: V18_RECIPE_IDS, V18_UPDATED_IDS: V18_UPDATED_IDS, defaultDiets: defaultDiets, KETO_RULES: KETO_RULES, defaultPhoto: defaultPhoto, LEGACY_DEFAULT_URLS: LEGACY_DEFAULT_URLS, defaultSettings: defaultSettings,
       mealName: function (id) { var m = MEALS.filter(function (x) { return x.id === id; })[0]; return m ? m.name : id; } };
   })();
   Foodly.Models = Models;
@@ -692,7 +737,8 @@
       if (!Array.isArray(s.restrictions.diets)) s.restrictions.diets = [];
       s.restrictions.diets = s.restrictions.diets.filter(function (id) { return s.diets.some(function (x) { return x.id === id; }); });
       s.profile = Object.assign({}, d.profile, s.profile || {});
-      if (!s.targets || !(s.targets.kcal > 0)) { s.targets = Nutrition.calcTargets(s.profile); s.targetsManual = false; }
+      if (!s.targets || !(s.targets.kcal > 0)) { s.targets = Nutrition.targetsFor(s); s.targetsManual = false; }
+      else if (!s.targetsManual) s.targets = Nutrition.targetsFor(s);   // расчётная норма всегда соответствует выбранным диетам
       state.settings = s;
       // новые встроенные продукты из обновлений приложения
       var have = {};
@@ -843,21 +889,43 @@
       { v: 1.725, label: 'Высокая (6–7 тренировок)' },
       { v: 1.9, label: 'Очень высокая (физический труд + спорт)' }
     ];
-    /* Миффлин–Сан Жеор × активность; похудение −15%, набор +10% */
-    function calcTargets(p) {
+    /* Миффлин–Сан Жеор × активность; похудение −15%, набор +10%.
+       mode = 'keto' — кетогенное распределение (калории те же):
+         углеводы (усвояемые, «чистые») = 5% калорий, но 20–30 г в день;
+         белок = 1,6 / 1,4 / 1,7 г на кг веса (похудение / поддержание / набор), не больше 25% калорий;
+         жиры = всё остальное: (ккал − 4·Б − 4·У) / 9 ≈ 70–77% калорий. */
+    function calcTargets(p, mode) {
       var w = Number(p.weight) || 60, h = Number(p.height) || 165, a = Number(p.age) || 30;
       var bmr = 10 * w + 6.25 * h - 5 * a + (p.sex === 'male' ? 5 : -161);
       var kcal = bmr * (Number(p.activity) || 1.2);
       if (p.goal === 'lose') kcal *= 0.85;
       if (p.goal === 'gain') kcal *= 1.10;
       kcal = Math.round(kcal / 10) * 10;
+      if (mode === 'keto') {
+        var kc = Math.min(30, Math.max(20, Math.round(kcal * 0.05 / 4)));
+        var kp = Math.round(Math.min(w * (p.goal === 'lose' ? 1.6 : p.goal === 'gain' ? 1.7 : 1.4), kcal * 0.25 / 4));
+        var kf = Math.max(0, Math.round((kcal - kp * 4 - kc * 4) / 9));
+        return { kcal: kcal, protein: kp, fat: kf, carbs: kc };
+      }
       var protein = Math.round(w * (p.goal === 'lose' ? 2.0 : 1.6));
       var fat = Math.round(kcal * 0.28 / 9);
       var carbs = Math.max(0, Math.round((kcal - protein * 4 - fat * 9) / 4));
       return { kcal: kcal, protein: protein, fat: fat, carbs: carbs };
     }
+    /* Режим расчёта нормы по выбранным для меню диетам: 'keto' или null */
+    function macroMode(settings, restrictions) {
+      var ids = ((restrictions || (settings && settings.restrictions)) || {}).diets || [];
+      return ((settings && settings.diets) || []).some(function (d) { return d.macro === 'keto' && ids.indexOf(d.id) >= 0; }) ? 'keto' : null;
+    }
+    function targetsFor(settings) { return calcTargets(settings.profile || {}, macroMode(settings)); }
+    /* Доли калорий из белков, жиров и углеводов (по 4/9/4 ккал на грамм) */
+    function macroPct(n) {
+      var k = (n.protein || 0) * 4 + (n.fat || 0) * 9 + (n.carbs || 0) * 4;
+      if (!(k > 0)) return { protein: 0, fat: 0, carbs: 0 };
+      return { protein: (n.protein || 0) * 4 / k * 100, fat: (n.fat || 0) * 9 / k * 100, carbs: (n.carbs || 0) * 4 / k * 100 };
+    }
     return { toGrams: toGrams, ingredientNutrition: ingredientNutrition, recipeTotals: recipeTotals, perServing: perServing,
-      badges: badges, scale: scale, add: add, empty: empty, calcTargets: calcTargets, ACTIVITY: ACTIVITY, NON_COUNTED: NON_COUNTED };
+      badges: badges, scale: scale, add: add, empty: empty, calcTargets: calcTargets, macroMode: macroMode, targetsFor: targetsFor, macroPct: macroPct, ACTIVITY: ACTIVITY, NON_COUNTED: NON_COUNTED };
   })();
   Foodly.Nutrition = Nutrition;
 
@@ -873,11 +941,19 @@
       if ((diet.products || []).indexOf(pid) >= 0) return true;
       var p = DB.product(pid); return !!(p && (diet.categories || []).indexOf(p.category) >= 0);
     }
+    function has(v) { return v != null && v !== ''; }
     function fits(recipe, diet) {
       if (!diet) return true;
       var bad = (recipe.ingredients || []).some(function (i) { return excludesProduct(diet, i.productId); });
       if (bad) return false;
-      if (diet.maxCarbs != null && diet.maxCarbs !== '') return Nutrition.perServing(recipe).carbs <= Number(diet.maxCarbs);
+      if (!has(diet.maxCarbs) && !has(diet.maxCarbsPct) && !has(diet.minFatPct)) return true;
+      var ps = Nutrition.perServing(recipe);
+      if (has(diet.maxCarbs) && ps.carbs > Number(diet.maxCarbs)) return false;
+      // доли калорий: не зависят от размера порции, поэтому работают и при 0,5–2,5 порциях в меню
+      var pct = Nutrition.macroPct(ps);
+      if (!(ps.kcal > 0)) return true;
+      if (has(diet.maxCarbsPct) && pct.carbs > Number(diet.maxCarbsPct) + 1e-9) return false;
+      if (has(diet.minFatPct) && pct.fat < Number(diet.minFatPct) - 1e-9) return false;
       return true;
     }
     function fitsAll(recipe, ids) { return (ids || []).every(function (id) { var d = get(id); return !d || fits(recipe, d); }); }
@@ -1160,7 +1236,7 @@
         pool[m.id] = allowed.filter(function (r) { return (r.meals || []).indexOf(m.id) >= 0; });
       });
       var shares = SLOT_SHARES[cfg.mealsPerDay] || SLOT_SHARES[3];
-      return { cfg: cfg, allowed: allowed, pool: pool, info: info, shares: shares, targets: cfg.targets };
+      return { cfg: cfg, allowed: allowed, pool: pool, info: info, shares: shares, targets: cfg.targets, keto: cfg.macroMode === 'keto' };
     }
 
     function mealNutrition(ctx, meal) {
@@ -1183,9 +1259,16 @@
       return n ? d / n : 0;
     }
     function kcalDev(t, target) { return target.kcal > 0 ? (t.kcal - target.kcal) / target.kcal : 0; }
-    function objective(t, target) {
+    /* Кето: углеводы — жёсткий потолок (превышение штрафуется сильно), жиры — не меньше 70% калорий */
+    var KETO_FAT_MIN = 70;
+    function ketoPenalty(t, target) {
+      var over = target.carbs > 0 ? Math.max(0, t.carbs - target.carbs) / target.carbs : 0;
+      var fat = Nutrition.macroPct(t).fat;
+      return over * 2 + Math.max(0, KETO_FAT_MIN - fat) / 100 * 6;
+    }
+    function objective(t, target, keto) {
       var kd = Math.abs(kcalDev(t, target));
-      return kd + Math.max(0, kd - 0.04) * 4 + 0.25 * macroDev(t, target);
+      return kd + Math.max(0, kd - 0.04) * 4 + (keto ? 0.5 : 0.25) * macroDev(t, target) + (keto ? ketoPenalty(t, target) : 0);
     }
     function bestPortion(kcal, slotKcal) {
       var best = PORTIONS[0], bd = Infinity;
@@ -1195,7 +1278,7 @@
     /* Донастройка порций дня: шаг ±0,5, пока улучшается целевая функция */
     function tune(ctx, meals) {
       for (var iter = 0; iter < 60; iter++) {
-        var cur = objective(dayTotals(ctx, meals), ctx.targets);
+        var cur = objective(dayTotals(ctx, meals), ctx.targets, ctx.keto);
         var bestGain = 1e-6, bestMove = null;
         meals.forEach(function (m, i) {
           if (!m || !m.recipeId || m.locked) return;
@@ -1203,7 +1286,7 @@
             var np = U.round(m.portions + d, 1);
             if (np < PORTIONS[0] || np > PORTIONS[PORTIONS.length - 1]) return;
             var old = m.portions; m.portions = np;
-            var val = objective(dayTotals(ctx, meals), ctx.targets);
+            var val = objective(dayTotals(ctx, meals), ctx.targets, ctx.keto);
             m.portions = old;
             if (cur - val > bestGain) { bestGain = cur - val; bestMove = [i, np]; }
           });
@@ -1214,9 +1297,11 @@
     }
     function candidatesFor(ctx, slot, usedToday, usage) {
       var relax = null;
-      var c = ctx.pool[slot].filter(function (r) { return !usedToday[r.id] && (usage[r.id] || 0) < MAX_PER_WEEK; });
+      // кето: подходящих блюд мало, поэтому лучше повторить жирное блюдо 3 раза за неделю, чем добирать нежирным
+      var maxWeek = ctx.keto ? MAX_PER_WEEK + 1 : MAX_PER_WEEK;
+      var c = ctx.pool[slot].filter(function (r) { return !usedToday[r.id] && (usage[r.id] || 0) < maxWeek; });
       if (!c.length) { relax = 'repeat'; c = ctx.pool[slot].filter(function (r) { return !usedToday[r.id]; }); }
-      if (!c.length) { relax = 'tag'; c = ctx.allowed.filter(function (r) { return !usedToday[r.id] && (usage[r.id] || 0) < MAX_PER_WEEK; }); }
+      if (!c.length) { relax = 'tag'; c = ctx.allowed.filter(function (r) { return !usedToday[r.id] && (usage[r.id] || 0) < maxWeek; }); }
       if (!c.length) { relax = 'tag'; c = ctx.allowed.filter(function (r) { return !usedToday[r.id]; }); }
       if (!c.length) { relax = 'tag'; c = ctx.allowed.slice(); }
       return { list: c, relax: relax };
@@ -1240,7 +1325,7 @@
             var inf = ctx.info[r.id];
             var p = bestPortion(inf.ps.kcal, slotT.kcal);
             var got = Nutrition.scale(inf.ps, p);
-            var s = Math.abs(got.kcal - slotT.kcal) / slotT.kcal + 0.35 * macroDev(got, slotT);
+            var s = Math.abs(got.kcal - slotT.kcal) / slotT.kcal + (ctx.keto ? 0.6 : 0.35) * macroDev(got, slotT) + (ctx.keto ? ketoPenalty(got, slotT) : 0);
             s += (usage[r.id] || 0) * 0.12;
             if (pref.moreProtein && inf.protein) s -= 0.15;
             if (pref.moreFiber && inf.fiber) s -= 0.15;
@@ -1253,9 +1338,9 @@
         tune(ctx, meals);
         var tot = dayTotals(ctx, meals);
         var dev = Math.abs(kcalDev(tot, t));
-        var score = objective(tot, t) + Object.keys(relaxed).length * 0.05;
+        var score = objective(tot, t, ctx.keto) + Object.keys(relaxed).length * 0.05;
         if (!best || score < best.score) best = { meals: meals, score: score, dev: dev, relaxed: relaxed, tot: tot };
-        if (dev <= 0.05 && macroDev(tot, t) <= 0.2) break;
+        if (dev <= 0.05 && macroDev(tot, t) <= 0.2 && (!ctx.keto || ketoPenalty(tot, t) < 0.01)) break;
       }
       return { date: date, seed: seed, meals: best.meals, warning: warningFor(ctx, best) };
     }
@@ -1263,7 +1348,13 @@
       var msgs = [];
       var relaxedSlots = Object.keys(best.relaxed);
       if (!ctx.allowed.length) return 'Нет подходящих рецептов. Добавьте рецепты' + ((ctx.cfg.restrictions && (ctx.cfg.restrictions.diets || []).length) ? ', выберите меньше диет' : '') + ' или разрешите больше продуктов в параметрах меню.';
-      if (best.dev <= 0.10 && !relaxedSlots.length) return null;
+      var ketoMsg = null;
+      if (ctx.keto) {
+        var pc = Nutrition.macroPct(best.tot);
+        if (best.tot.carbs > ctx.targets.carbs * 1.1) ketoMsg = 'углеводов ' + U.fmt(best.tot.carbs) + ' г при норме ' + ctx.targets.carbs + ' г — для кето это много, добавьте кето-рецепты';
+        else if (pc.fat < KETO_FAT_MIN - 5) ketoMsg = 'жиры дают только ' + U.fmt(pc.fat) + '% калорий (для кето нужно 70–75%) — добавьте более жирные кето-рецепты';
+      }
+      if (best.dev <= 0.10 && !relaxedSlots.length && !ketoMsg) return null;
       relaxedSlots.forEach(function (s) {
         var name = Models.mealName(s).toLowerCase();
         var more = (ctx.cfg.restrictions && (ctx.cfg.restrictions.diets || []).length) ? 'добавьте рецепты под выбранную диету' : 'добавьте рецепты или разрешите больше продуктов';
@@ -1276,13 +1367,14 @@
           ? 'блюда слишком калорийные даже в половине порции — добавьте лёгкие рецепты'
           : 'калорий не хватает даже с 2,5 порциями — добавьте более сытные рецепты или разрешите больше продуктов'));
       }
+      if (ketoMsg) msgs.push(ketoMsg);
       var s = msgs.join('; ');
       return s.charAt(0).toUpperCase() + s.slice(1) + '.';
     }
     function snapshotCfg(settings) {
       return {
-        targets: U.clone(settings.targets && settings.targets.kcal > 0 ? settings.targets : Nutrition.calcTargets(settings.profile)), mealsPerDay: settings.mealsPerDay, people: settings.people,
-        restrictions: U.clone(settings.restrictions)
+        targets: U.clone(settings.targets && settings.targets.kcal > 0 ? settings.targets : Nutrition.targetsFor(settings)), mealsPerDay: settings.mealsPerDay, people: settings.people,
+        restrictions: U.clone(settings.restrictions), macroMode: Nutrition.macroMode(settings)
       };
     }
     function usageOf(days, skipIndex) {
@@ -1336,7 +1428,7 @@
         var bestP = 1, bestV = Infinity, bestTot = null;
         PORTIONS.forEach(function (p) {
           var tot = Nutrition.add(otherTot, Nutrition.scale(inf.ps, p));
-          var v = objective(tot, t);
+          var v = objective(tot, t, ctx.keto);
           if (v < bestV - 1e-9) { bestV = v; bestP = p; bestTot = tot; }
         });
         var sameDay = others.some(function (m) { return m.recipeId === r.id; });
@@ -2342,6 +2434,11 @@
       return U.fmt(amount, amount < 10 ? 2 : amount < 100 ? 1 : 0) + ' ' + unit;
     }
     function dietFitHtml(r) {
+      var pc = Nutrition.macroPct(Nutrition.perServing(r));
+      var ratio = '<p class="macro-pct small muted">Доли калорий: жиры ' + U.fmt(pc.fat) + '%, белки ' + U.fmt(pc.protein) + '%, углеводы ' + U.fmt(pc.carbs) + '%</p>';
+      return ratio + dietFitList(r);
+    }
+    function dietFitList(r) {
       var m = Diets.matching(r);
       if (!m.length) return Diets.all().length ? '<p class="diet-fit small muted">Не подходит ни под одну из диет</p>' : '';
       return '<p class="diet-fit small"><strong>Подходит:</strong> ' + m.map(function (d) { return '<span class="diet-tag">' + U.esc(Diets.label(d)) + '</span>'; }).join(' ') + '</p>';
@@ -3309,7 +3406,7 @@
     var openPlanId = null;
     function S() { return DB.state.settings; }
     function ensureTargets() {
-      if (!S().targets || !S().targetsManual) S().targets = Nutrition.calcTargets(S().profile);
+      if (!S().targets || !S().targetsManual) S().targets = Nutrition.targetsFor(S());
     }
     function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
     function peopleWord(n) { return U.plural(n, 'человека', 'человек', 'человек'); }
@@ -3374,7 +3471,7 @@
         });
         if (!ok) return;
         S().profile = np;
-        if (!S().targetsManual) { S().targets = Nutrition.calcTargets(np); fillTargets(); }
+        if (!S().targetsManual) { S().targets = Nutrition.targetsFor(S()); fillTargets(); }
         DB.save('settings'); changed();
       }
       $$('#profile-form input[name="sex"], #pf-activity, #pf-goal', root).forEach(function (el) { el.addEventListener('change', readProfile); });
@@ -3396,7 +3493,7 @@
         });
       });
       $('[data-a="recalc"]', root).addEventListener('click', function () {
-        S().targetsManual = false; S().targets = Nutrition.calcTargets(S().profile);
+        S().targetsManual = false; S().targets = Nutrition.targetsFor(S());
         DB.save('settings'); fillTargets(); changed(); updateDietCount();
         UI.toast('Норма рассчитана заново: ' + S().targets.kcal + ' ккал в день');
       });
@@ -3431,17 +3528,20 @@
         var ex = S().restrictions.excluded;
         var n = Recipes.ready().filter(function (r) { return Diets.fitsAll(r, ids) && !Recipes.containsProduct(r, ex); }).length;
         var txt = n ? 'Подходящих рецептов: ' + n + '.' + (n < 8 ? ' Этого мало для разнообразного меню — блюда будут повторяться.' : '') : 'Нет рецептов, подходящих под все выбранные диеты.';
-        // низкоуглеводная диета, а дневная норма углеводов обычная — подскажем поправить норму
-        var lowCarb = ids.map(Diets.get).filter(function (d) { return d && d.maxCarbs != null && d.maxCarbs !== ''; })[0];
-        if (lowCarb && S().targets.carbs > lowCarb.maxCarbs * (S().mealsPerDay || 3)) txt += ' Для диеты «' + lowCarb.name + '» снизьте норму углеводов выше (например, до ' + lowCarb.maxCarbs * (S().mealsPerDay || 3) + ' г), а освободившиеся калории перенесите в жиры.';
+        // кето выбрано, а норма задана вручную и не кетогенная — подскажем
+        if (Nutrition.macroMode(S()) === 'keto' && S().targetsManual && S().targets.carbs > 50) txt += ' Норма задана вручную и не подходит для кето (углеводов больше 50 г) — нажмите «Вернуть расчётные значения».';
         el.textContent = txt;
       }
       $('#pp-diets', root).addEventListener('click', function (e) {
         var c = e.target.closest('[data-diet]'); if (!c) return;
         var ids = S().restrictions.diets, i = ids.indexOf(c.dataset.diet);
+        var wasKeto = Nutrition.macroMode(S()) === 'keto';
         if (i >= 0) ids.splice(i, 1); else ids.push(c.dataset.diet);
         c.setAttribute('aria-pressed', String(i < 0));
+        var isKeto = Nutrition.macroMode(S()) === 'keto';
+        if (!S().targetsManual) { S().targets = Nutrition.targetsFor(S()); fillTargets(); }
         DB.save('settings'); updateDietCount(); changed();
+        if (wasKeto !== isKeto && !S().targetsManual) UI.toast(isKeto ? 'Норма пересчитана для кето: ' + S().targets.fat + ' г жиров, ' + S().targets.protein + ' г белков, ' + S().targets.carbs + ' г углеводов' : 'Норма пересчитана для обычного питания');
       });
       updateDietCount();
       [['#sw-protein', 'moreProtein'], ['#sw-fiber', 'moreFiber']].forEach(function (x) {
@@ -3475,14 +3575,22 @@
     }
     function updateTargetsHint() {
       var el = root && $('#targets-hint', root);
-      if (el) el.textContent = S().targetsManual ? 'Задана вручную.' : 'Рассчитана по формуле Миффлина–Сан Жеора с учётом активности и цели. Любое значение можно поправить.';
+      if (!el) return;
+      var keto = Nutrition.macroMode(S()) === 'keto';
+      if (S().targetsManual) el.textContent = 'Задана вручную.' + (keto ? ' Чтобы получить кето-норму, нажмите «Вернуть расчётные значения».' : '');
+      else if (keto) el.textContent = 'Кето-норма. Калории — по формуле Миффлина–Сан Жеора с учётом активности и цели. Углеводы — 5% калорий, но 20–30 г в день. Белок — 1,4 г на кг веса (1,6 при похудении, 1,7 при наборе), не больше 25% калорий. Остальное — жиры, около 70–75% калорий. Любое значение можно поправить.';
+      else el.textContent = 'Рассчитана по формуле Миффлина–Сан Жеора с учётом активности и цели. Любое значение можно поправить.';
     }
     function updateSummary() {
       var el = root && $('#plan-summary', root); if (!el) return;
       var s = S(), t = s.targets, ex = s.restrictions.excluded;
       var exNames = ex.map(function (id) { var p = DB.product(id); return p ? p.name.toLowerCase() : id; });
       el.innerHTML = '<p class="ps-main"><strong>' + U.fmt(t.kcal) + ' ккал в день</strong> на одного человека</p>' +
-        '<p class="muted">Белки ' + t.protein + ' г, жиры ' + t.fat + ' г, углеводы ' + t.carbs + ' г</p>' +
+        '<p class="muted">Белки ' + t.protein + ' г, жиры ' + t.fat + ' г, углеводы ' + t.carbs + ' г' + (function () {
+          if (Nutrition.macroMode(s) !== 'keto') return '';
+          var pc = Nutrition.macroPct(t);
+          return ' · ' + U.fmt(pc.fat) + '% калорий из жиров, ' + U.fmt(pc.protein) + '% из белков, ' + U.fmt(pc.carbs) + '% из углеводов';
+        })() + '</p>' +
         '<ul class="facts"><li>' + s.mealsPerDay + ' ' + U.plural(s.mealsPerDay, 'приём', 'приёма', 'приёмов') + ' пищи в день</li>' +
         '<li>Продукты на ' + s.people + ' ' + peopleWord(s.people) + '</li>' +
         (Diets.names(s.restrictions.diets).length ? '<li>Диета: ' + U.esc(Diets.names(s.restrictions.diets).join(', ')) + '</li>' : '') +
@@ -3583,6 +3691,7 @@
         (d.warning ? '<p class="day-warn" role="note">⚠ ' + U.esc(d.warning) + '</p>' : '') +
         '<ul class="meals"></ul>' +
         '<div class="day-foot"><p class="muted small">За день: белки ' + U.fmt(tt.protein) + ' г из ' + t.protein + ', жиры ' + U.fmt(tt.fat) + ' г из ' + t.fat + ', углеводы ' + U.fmt(tt.carbs) + ' г из ' + t.carbs + ', клетчатка ' + U.fmt(tt.fiber) + ' г</p>' +
+        (plan.settings.macroMode === 'keto' ? (function () { var pc = Nutrition.macroPct(tt); return '<p class="small keto-day' + (pc.fat >= 65 && tt.carbs <= t.carbs * 1.1 ? '' : ' is-off') + '">Кето: ' + U.fmt(pc.fat) + '% калорий из жиров, ' + U.fmt(pc.protein) + '% из белков, ' + U.fmt(pc.carbs) + '% из углеводов</p>'; })() : '') +
         '<button type="button" class="btn btn-ghost btn-sm" data-a="regen">Подобрать блюда на этот день заново</button></div></div></li>');
       $('.day-toggle', li).addEventListener('click', function () {
         openDays[d.date] = !openDays[d.date];
