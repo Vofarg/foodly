@@ -80,7 +80,7 @@
    * ======================================================================= */
   var Storage = (function () {
     var NS = 'foodly:v1:';
-    var SCHEMA_VERSION = 8;
+    var SCHEMA_VERSION = 9;
     var onError = function () {};
     var readErrors = 0;
 
@@ -205,6 +205,11 @@
           if (have[id] || !fresh[id]) return;
           var r = fresh[id]; r.draft = false; r.createdAt = r.updatedAt = Date.now(); data.recipes.push(r);
         });
+        return data;
+      },
+      // v8 -> v9: холодильник (foodly:v1:fridge); список «всегда есть дома» (settings.pantry) добавит DB.ensureIntegrity
+      8: function (data) {
+        if (!Array.isArray(data.fridge)) data.fridge = [];
         return data;
       }
     };
@@ -633,6 +638,8 @@
     /* Кето в v1.8: вместо «≤ 15 г углеводов на порцию» — доли калорий (не зависят от размера порции) и своя норма КБЖУ */
     var KETO_RULES = { maxCarbs: null, maxCarbsPct: 10, minFatPct: 60, macro: 'keto' };
     function defaultDiets() { return DEFAULT_DIETS.map(function (d) { var c = U.clone(d); c.builtin = true; return c; }); }
+    /* «Всегда есть дома»: эти продукты холодильник не требует (соль, перец, вода, масло, все специи) */
+    function defaultPantry() { return { categories: ['spices'], products: ['salt', 'black-pepper', 'water', 'sunflower-oil', 'olive-oil'] }; }
 
     /* Фото по умолчанию: Unsplash (бесплатная лицензия Unsplash) и Wikimedia Commons (свободные лицензии).
        Автор и источник — в подписи под фото, по ссылке — страница фото с лицензией */
@@ -690,13 +697,14 @@
         targets: null, targetsManual: false,
         restrictions: { excluded: [], diets: [], moreProtein: false, moreFiber: false },
         diets: defaultDiets(),
+        pantry: defaultPantry(),
         mealsPerDay: 3, people: 1,
         categories: U.clone(DEFAULT_CATEGORIES)
       };
     }
 
     return { UNITS: UNITS, MEALS: MEALS, DEFAULT_CATEGORIES: DEFAULT_CATEGORIES,
-      buildProducts: buildProducts, buildRecipes: buildRecipes, V17_RECIPE_IDS: V17_RECIPE_IDS, V18_RECIPE_IDS: V18_RECIPE_IDS, V18_UPDATED_IDS: V18_UPDATED_IDS, defaultDiets: defaultDiets, KETO_RULES: KETO_RULES, defaultPhoto: defaultPhoto, LEGACY_DEFAULT_URLS: LEGACY_DEFAULT_URLS, defaultSettings: defaultSettings,
+      buildProducts: buildProducts, buildRecipes: buildRecipes, V17_RECIPE_IDS: V17_RECIPE_IDS, V18_RECIPE_IDS: V18_RECIPE_IDS, V18_UPDATED_IDS: V18_UPDATED_IDS, defaultDiets: defaultDiets, defaultPantry: defaultPantry, KETO_RULES: KETO_RULES, defaultPhoto: defaultPhoto, LEGACY_DEFAULT_URLS: LEGACY_DEFAULT_URLS, defaultSettings: defaultSettings,
       mealName: function (id) { var m = MEALS.filter(function (x) { return x.id === id; })[0]; return m ? m.name : id; } };
   })();
   Foodly.Models = Models;
@@ -705,7 +713,7 @@
    * Storage: DB — загрузка/сохранение состояния приложения
    * ======================================================================= */
   var DB = (function () {
-    var state = { products: [], recipes: [], shopping: [], plan: null, settings: null };
+    var state = { products: [], recipes: [], shopping: [], fridge: [], plan: null, settings: null };
     var productMap = {};
     var listeners = [];
 
@@ -717,6 +725,7 @@
       state.products = Models.buildProducts();
       state.recipes = Models.buildRecipes();
       state.shopping = [];
+      state.fridge = [];
       state.plan = null;
       var theme = state.settings ? state.settings.theme : null;
       state.settings = Models.defaultSettings();
@@ -736,6 +745,9 @@
       Models.defaultDiets().forEach(function (x) { if (!haveDiet[x.id]) s.diets.push(x); });
       if (!Array.isArray(s.restrictions.diets)) s.restrictions.diets = [];
       s.restrictions.diets = s.restrictions.diets.filter(function (id) { return s.diets.some(function (x) { return x.id === id; }); });
+      if (!s.pantry || typeof s.pantry !== 'object') s.pantry = Models.defaultPantry();
+      if (!Array.isArray(s.pantry.categories)) s.pantry.categories = [];
+      if (!Array.isArray(s.pantry.products)) s.pantry.products = [];
       s.profile = Object.assign({}, d.profile, s.profile || {});
       if (!s.targets || !(s.targets.kcal > 0)) { s.targets = Nutrition.targetsFor(s); s.targetsManual = false; }
       else if (!s.targetsManual) s.targets = Nutrition.targetsFor(s);   // расчётная норма всегда соответствует выбранным диетам
@@ -746,6 +758,9 @@
       Models.buildProducts().forEach(function (p) { if (!have[p.id]) state.products.push(p); });
       if (!Array.isArray(state.recipes)) state.recipes = [];
       if (!Array.isArray(state.shopping)) state.shopping = [];
+      if (!Array.isArray(state.fridge)) state.fridge = [];
+      state.fridge = state.fridge.filter(function (x) { return x && typeof x === 'object' && x.productId; });
+      state.fridge.forEach(function (x) { if (!x.id) x.id = U.uid('fr'); if (!x.unit) x.unit = 'г'; if (x.amount === undefined) x.amount = null; if (x.expires === undefined) x.expires = null; });
     }
     function init() {
       var meta = Storage.get('meta', null);
@@ -761,6 +776,7 @@
         products: Storage.get('products', null) || Models.buildProducts(),
         recipes: Storage.get('recipes', []),
         shopping: Storage.get('shopping', []),
+        fridge: Storage.get('fridge', []),
         plan: Storage.get('plan', null),
         settings: Storage.get('settings', null) || Models.defaultSettings()
       };
@@ -769,7 +785,7 @@
         data = Storage.migrate(data, meta.schemaVersion || 1);
         migrated = true;
       }
-      state.products = data.products; state.recipes = data.recipes; state.shopping = data.shopping;
+      state.products = data.products; state.recipes = data.recipes; state.shopping = data.shopping; state.fridge = data.fridge;
       state.plan = data.plan; state.settings = data.settings;
       ensureIntegrity();
       rebuildIndex();
@@ -783,7 +799,7 @@
     }
     function saveAll() {
       var ok = true;
-      ['products', 'recipes', 'shopping', 'plan', 'settings'].forEach(function (k) { ok = Storage.set(k, state[k]) && ok; });
+      ['products', 'recipes', 'shopping', 'fridge', 'plan', 'settings'].forEach(function (k) { ok = Storage.set(k, state[k]) && ok; });
       Storage.set('meta', { schemaVersion: Storage.SCHEMA_VERSION, updatedAt: Date.now() });
       rebuildIndex();
       listeners.forEach(function (fn) { fn('*'); });
@@ -815,7 +831,7 @@
     function exportData() {
       return {
         app: 'Foodly!', schemaVersion: Storage.SCHEMA_VERSION, exportedAt: new Date().toISOString(),
-        data: U.clone({ products: state.products, recipes: state.recipes, shopping: state.shopping, plan: state.plan, settings: state.settings })
+        data: U.clone({ products: state.products, recipes: state.recipes, shopping: state.shopping, fridge: state.fridge, plan: state.plan, settings: state.settings })
       };
     }
     return { state: state, init: init, save: save, saveAll: saveAll, seed: seed, ensureIntegrity: ensureIntegrity,
@@ -1189,6 +1205,183 @@
     return { toBase: toBase, convert: convert, addItem: addItem, addRecipe: addRecipe, grouped: grouped, formatQty: formatQty, refsLabel: refsLabel, keyOf: keyOf };
   })();
   Foodly.Shopping = Shopping;
+
+  /* =======================================================================
+   * Fridge — что есть дома и подбор рецептов, для которых меньше всего докупать
+   *   item: {id, productId, amount|null, unit (г/мл/шт…), addedAt, expires|null}
+   *   amount = null — «есть», количество не важно
+   * ======================================================================= */
+  var Fridge = (function () {
+    var MAX_MISSING = 3;
+    var EPS = 1e-6;
+    function all() { return DB.state.fridge; }
+    function byProduct(pid) { return all().filter(function (x) { return x.productId === pid; })[0] || null; }
+    function pantry() { return (DB.state.settings && DB.state.settings.pantry) || { categories: [], products: [] }; }
+    /* Продукт «всегда есть дома» — холодильник его не требует */
+    function isPantry(pid) {
+      var pt = pantry();
+      if (pt.products.indexOf(pid) >= 0) return true;
+      var p = DB.product(pid);
+      return !!(p && pt.categories.indexOf(p.category) >= 0);
+    }
+    function normAmount(amount, unit, product) {
+      if (amount == null || amount === '' || unit === 'по вкусу' || unit === 'щепотка') return { amount: null, unit: unit === 'по вкусу' || unit === 'щепотка' ? 'г' : (unit || 'г') };
+      var b = Shopping.toBase(amount, unit, product);
+      return { amount: U.round(b.amount, 3), unit: b.unit };
+    }
+    /* Добавить продукт; если он уже есть — суммируем (через граммы/мл/шт, если единицы разные) */
+    function add(raw) {
+      var p = DB.product(raw.productId); if (!p) return null;
+      var n = normAmount(raw.amount, raw.unit, p);
+      var ex = byProduct(p.id);
+      if (!ex) {
+        ex = { id: U.uid('fr'), productId: p.id, amount: n.amount, unit: n.unit, addedAt: Date.now(), expires: raw.expires || null };
+        all().push(ex);
+        return ex;
+      }
+      if (raw.expires && (!ex.expires || raw.expires < ex.expires)) ex.expires = raw.expires;
+      if (n.amount == null) return ex;                       // «есть» ничего не меняет в количестве
+      if (ex.amount == null) { ex.amount = n.amount; ex.unit = n.unit; return ex; }
+      var c = Shopping.convert(n.amount, n.unit, ex.unit, p);
+      if (c != null) { ex.amount = U.round(ex.amount + c, 3); return ex; }
+      var back = Shopping.convert(ex.amount, ex.unit, n.unit, p);
+      if (back != null) { ex.amount = U.round(back + n.amount, 3); ex.unit = n.unit; return ex; }
+      ex.amount = n.amount; ex.unit = n.unit;                  // несравнимые единицы — берём новое значение
+      return ex;
+    }
+    function remove(id) {
+      var i = all().findIndex(function (x) { return x.id === id; });
+      if (i < 0) return null;
+      return { item: all().splice(i, 1)[0], index: i };
+    }
+    function snapshot() { return U.clone(all()); }
+    function restore(snap) { DB.state.fridge = snap; DB.save('fridge'); }
+
+    /* Сколько продукта в холодильнике в единицах `unit`: число, Infinity («есть» без количества) или null (не сравнить) */
+    function availableIn(item, unit, product) {
+      if (!item) return 0;
+      if (item.amount == null) return Infinity;
+      if (item.unit === unit) return item.amount;
+      return Shopping.convert(item.amount, item.unit, unit, product);
+    }
+    /* Сопоставление рецепта с холодильником. mult — множитель порций (1 = как в рецепте).
+       → {have:[], missing:[], pantry:[], total, score} */
+    function match(recipe, mult) {
+      mult = mult == null ? 1 : mult;
+      var have = [], missing = [], pantryList = [];
+      var used = {};   // сколько уже «потратили» на предыдущие строки рецепта: pid → {unit, amount}
+      var seen = {};
+      (recipe.ingredients || []).forEach(function (ing) {
+        var p = DB.product(ing.productId); if (!p) return;
+        if (isPantry(p.id)) { if (!seen['p:' + p.id]) pantryList.push(p); seen['p:' + p.id] = true; return; }
+        var item = byProduct(p.id);
+        var need = Shopping.toBase((Number(ing.amount) || 0) * mult, ing.unit, p);
+        var entry = { productId: p.id, name: p.name, category: p.category, amount: need.amount, unit: need.unit, expires: item ? item.expires : null };
+        if (!item) { missing.push(entry); return; }
+        if (need.unit === 'по вкусу' || item.amount == null) { have.push(entry); return; }
+        var avail = availableIn(item, need.unit, p);
+        if (avail == null) { have.push(entry); return; }      // единицы не сравнить — считаем, что есть
+        var u = used[p.id]; var spent = u && u.unit === need.unit ? u.amount : 0;
+        var left = avail - spent;
+        used[p.id] = { unit: need.unit, amount: spent + need.amount };
+        if (left + EPS >= need.amount) { have.push(entry); return; }
+        entry.partial = true; entry.haveAmount = Math.max(0, left); entry.shortfall = need.amount - Math.max(0, left);
+        missing.push(entry);
+      });
+      // одна и та же позиция несколько раз — в списках показываем один раз
+      function uniq(list) { var s = {}; return list.filter(function (x) { if (s[x.productId]) return false; s[x.productId] = true; return true; }); }
+      var missingIds = {}; missing.forEach(function (x) { missingIds[x.productId] = true; });
+      have = uniq(have.filter(function (x) { return !missingIds[x.productId]; }));
+      missing = uniq(missing);
+      var total = have.length + missing.length;
+      return { have: have, missing: missing, pantry: pantryList, total: total, score: total ? have.length / total : 0 };
+    }
+    function daysLeft(iso) {
+      if (!iso) return null;
+      var t = U.todayISO(); var a = iso.split('-'), b = t.split('-');
+      return Math.round((new Date(+a[0], +a[1] - 1, +a[2]) - new Date(+b[0], +b[1] - 1, +b[2])) / 86400000);
+    }
+    /* Подходящие рецепты: только готовые; с ≥1 продуктом из холодильника и ≤3 недостающими.
+       opts: {meal, respect} — respect: учитывать диеты и исключённые продукты из «Параметров меню» */
+    function suggestions(opts) {
+      opts = opts || {};
+      if (!all().length) return [];
+      var rs = DB.state.settings.restrictions;
+      var ex = opts.respect ? rs.excluded : [], diets = opts.respect ? (rs.diets || []) : [];
+      return Recipes.ready().filter(function (r) {
+        if (opts.meal && (r.meals || []).indexOf(opts.meal) < 0) return false;
+        if (diets.length && !Diets.fitsAll(r, diets)) return false;
+        return !Recipes.containsProduct(r, ex);
+      }).map(function (r) {
+        var m = match(r);
+        // скоро испортится — такие рецепты чуть выше при прочих равных
+        m.urgent = m.have.filter(function (x) { var d = daysLeft(x.expires); return d != null && d <= 2; }).length;
+        return { recipe: r, match: m };
+      }).filter(function (x) { return x.match.have.length > 0 && x.match.missing.length <= MAX_MISSING; })
+        .sort(function (a, b) {
+          var am = a.match.missing.length, bm = b.match.missing.length;
+          if (am !== bm) return am - bm;
+          if (Math.abs(a.match.score - b.match.score) > EPS) return b.match.score - a.match.score;
+          if (a.match.urgent !== b.match.urgent) return b.match.urgent - a.match.urgent;
+          if (a.match.have.length !== b.match.have.length) return b.match.have.length - a.match.have.length;
+          return a.recipe.title.localeCompare(b.recipe.title, 'ru');
+        });
+    }
+    /* «Докупить недостающее»: в список покупок только то, чего нет (или не хватает) */
+    function buyMissing(recipe, m, mult) {
+      m = m || match(recipe, mult);
+      var ref = { type: 'recipe', id: recipe.id, title: recipe.title, portions: U.round(recipe.servings * (mult == null ? 1 : mult), 2) };
+      m.missing.forEach(function (x) {
+        Shopping.addItem(DB.state.shopping, { productId: x.productId, amount: x.partial ? x.shortfall : x.amount, unit: x.unit, source: 'fridge' }, ref);
+      });
+      return m.missing.length;
+    }
+    /* «Приготовлено»: списать ингредиенты из холодильника. Позиции без количества не трогаем. → число изменённых позиций */
+    function consume(recipe, mult) {
+      mult = mult == null ? 1 : mult;
+      var changed = {};
+      (recipe.ingredients || []).forEach(function (ing) {
+        var p = DB.product(ing.productId); if (!p || isPantry(p.id)) return;
+        var item = byProduct(p.id); if (!item || item.amount == null) return;
+        var need = Shopping.toBase((Number(ing.amount) || 0) * mult, ing.unit, p);
+        if (need.unit === 'по вкусу') return;
+        var c = item.unit === need.unit ? need.amount : Shopping.convert(need.amount, need.unit, item.unit, p);
+        if (c == null) return;
+        item.amount = U.round(item.amount - c, 3);
+        changed[item.id] = true;
+      });
+      DB.state.fridge = all().filter(function (x) { return !(changed[x.id] && x.amount != null && x.amount <= EPS); });
+      return Object.keys(changed).length;
+    }
+    /* Купленное из списка покупок → в холодильник (суммируя). Позиции без продукта из справочника пропускаем */
+    function fromShopping() {
+      var moved = 0, skipped = [], movedIds = {};
+      DB.state.shopping.forEach(function (it) {
+        if (!it.checked) return;
+        var p = it.productId ? DB.product(it.productId) : DB.findProductByName(it.name);
+        if (!p) { skipped.push(it.name); return; }
+        add({ productId: p.id, amount: it.unit === 'по вкусу' ? null : it.amount, unit: it.unit });
+        movedIds[it.id] = true; moved++;
+      });
+      if (moved) DB.state.shopping = DB.state.shopping.filter(function (it) { return !movedIds[it.id]; });
+      return { moved: moved, skipped: skipped };
+    }
+    function qtyLabel(item) {
+      if (item.amount == null) return 'есть';
+      return Shopping.formatQty(item.amount, item.unit);
+    }
+    function grouped() {
+      var list = all().map(function (x) {
+        var p = DB.product(x.productId);
+        return { item: x, name: p ? p.name : '(продукт удалён)', category: p ? p.category : 'other', checked: false };
+      });
+      return Shopping.grouped(list);
+    }
+    return { all: all, byProduct: byProduct, isPantry: isPantry, add: add, remove: remove, snapshot: snapshot, restore: restore,
+      match: match, suggestions: suggestions, buyMissing: buyMissing, consume: consume, fromShopping: fromShopping,
+      qtyLabel: qtyLabel, grouped: grouped, daysLeft: daysLeft, MAX_MISSING: MAX_MISSING };
+  })();
+  Foodly.Fridge = Fridge;
 
   /* =======================================================================
    * Planner — детерминированный подбор плана питания на 7 дней
@@ -1856,6 +2049,10 @@
       if (d.products != null && !Array.isArray(d.products)) errs.push('products должен быть массивом');
       if (d.recipes != null && !Array.isArray(d.recipes)) errs.push('recipes должен быть массивом');
       if (d.shopping != null && !Array.isArray(d.shopping)) errs.push('shopping должен быть массивом');
+      if (d.fridge != null && !Array.isArray(d.fridge)) errs.push('fridge должен быть массивом');
+      (d.fridge || []).forEach(function (x, i) {
+        if (!isObj(x) || typeof x.productId !== 'string') errs.push('продукт холодильника №' + (i + 1) + ' повреждён');
+      });
       (d.products || []).forEach(function (p, i) {
         if (!isObj(p) || typeof p.id !== 'string' || typeof p.name !== 'string' || !isObj(p.per100)) errs.push('продукт №' + (i + 1) + ' повреждён');
       });
@@ -1873,7 +2070,7 @@
       });
       if (errs.length) return { ok: false, error: 'Файл повреждён: ' + errs.slice(0, 3).join('; ') + (errs.length > 3 ? ' и ещё ' + (errs.length - 3) : '') + '.' };
       var data = Storage.migrate(U.clone(d), v);
-      return { ok: true, data: data, counts: { recipes: (data.recipes || []).length, products: (data.products || []).length, shopping: (data.shopping || []).length,
+      return { ok: true, data: data, counts: { recipes: (data.recipes || []).length, products: (data.products || []).length, shopping: (data.shopping || []).length, fridge: (data.fridge || []).length,
         photos: (data.photos || []).length + (data.recipes || []).filter(function (r) { return typeof r.photo === 'string' && r.photo.indexOf('data:') === 0; }).length } };
     }
     function mergeById(cur, inc, preferIncoming) {
@@ -1913,12 +2110,17 @@
           s.products = data.products || Models.buildProducts();
           s.recipes = data.recipes || [];
           s.shopping = data.shopping || [];
+          s.fridge = data.fridge || [];
           s.plan = data.plan || null;
           s.settings = data.settings || Models.defaultSettings();
         } else {
           mergeById(s.products, data.products || [], function (a, b) { return b.isCustom || !a.isCustom; });
           mergeById(s.recipes, data.recipes || [], function (a, b) { return (b.updatedAt || 0) > (a.updatedAt || 0); });
           mergeById(s.shopping, data.shopping || [], function () { return false; });
+          // холодильник: добавляем продукты, которых ещё нет (по productId)
+          var inFridge = {}; (s.fridge || []).forEach(function (x) { inFridge[x.productId] = true; });
+          s.fridge = s.fridge || [];
+          (data.fridge || []).forEach(function (x) { if (x && x.productId && !inFridge[x.productId]) { s.fridge.push(x); inFridge[x.productId] = true; } });
           if (!s.plan && data.plan) s.plan = data.plan;
           if (data.settings) {
             var ids = {};
@@ -1926,6 +2128,10 @@
             (data.settings.categories || []).forEach(function (c) { if (!ids[c.id]) s.settings.categories.push(c); });
             var ex = s.settings.restrictions.excluded;
             ((data.settings.restrictions || {}).excluded || []).forEach(function (id) { if (ex.indexOf(id) < 0) ex.push(id); });
+            // «всегда есть дома»: объединяем списки
+            if (data.settings.pantry && s.settings.pantry) ['categories', 'products'].forEach(function (k) {
+              (data.settings.pantry[k] || []).forEach(function (id) { if (s.settings.pantry[k].indexOf(id) < 0) s.settings.pantry[k].push(id); });
+            });
             // диеты: добавляем недостающие по id
             if (Array.isArray(data.settings.diets)) {
               s.settings.diets = s.settings.diets || [];
@@ -2457,6 +2663,7 @@
         }).join('') + '</div>' + UI.macroBar(ps) +
         '<p class="muted small">На 1 порцию. Рецепт рассчитан на ' + r.servings + ' ' + U.plural(r.servings, 'порцию', 'порции', 'порций') + '.</p>' +
         '<div class="badges">' + UI.badgesHtml(ps) + '</div>' + dietFitHtml(r) +
+        '<div class="rv-fridge small" hidden></div>' +
         '<div class="rv-section"><div class="rv-ing-head"><h3>Ингредиенты</h3>' +
         '<div class="rv-portions"><span class="muted small" id="rv-portions-lbl">Готовим порций:</span><div class="stepper" role="group" aria-labelledby="rv-portions-lbl"><button type="button" class="icon-btn" data-step="-1" aria-label="Меньше порций">−</button>' +
         '<output class="stepper-val" aria-live="polite"></output><button type="button" class="icon-btn" data-step="1" aria-label="Больше порций">+</button></div></div></div>' +
@@ -2481,7 +2688,35 @@
             (g.status === 'missing' ? ' <span class="warn-inline" title="Не задан вес единицы">⚠</span>' : '') + '</span></li>';
         }).join('');
         $('[data-step="-1"]', content).disabled = portions <= 1;
+        renderFridge();
       }
+      /* Холодильник: сколько ингредиентов уже есть дома (на выбранное число порций) */
+      function renderFridge() {
+        var box = $('.rv-fridge', content);
+        if (!Fridge.all().length) { box.hidden = true; return; }
+        var fm = Fridge.match(r, portions / r.servings);
+        if (!fm.total) { box.hidden = true; return; }
+        box.hidden = false;
+        box.innerHTML = '<span class="rv-fridge-text"><span aria-hidden="true">🧊</span> Из холодильника есть <strong>' + fm.have.length + ' из ' + fm.total + '</strong>' +
+          (fm.missing.length ? ' · не хватает: ' + U.esc(fm.missing.map(function (x) { return x.name; }).join(', ')) : ' — всё есть 🎉') + '</span>' +
+          '<span class="rv-fridge-actions">' + (fm.missing.length ? '<button type="button" class="link-btn" data-fr="buy">Докупить недостающее</button>' : '') +
+          (fm.have.length ? '<button type="button" class="link-btn" data-fr="cook">Приготовлено — списать из холодильника</button>' : '') + '</span>';
+      }
+      $('.rv-fridge', content).addEventListener('click', function (e) {
+        var b = e.target.closest('[data-fr]'); if (!b) return;
+        var mult = portions / r.servings;
+        if (b.dataset.fr === 'buy') {
+          var n = Fridge.buyMissing(r, null, mult);
+          if (DB.save('shopping')) UI.toast('В список покупок: ' + n + ' ' + U.plural(n, 'продукт', 'продукта', 'продуктов') + ' для «' + r.title + '»', { actionLabel: 'Открыть список', onAction: function () { location.hash = '#shopping'; } });
+        } else {
+          var snap = Fridge.snapshot();
+          var changed = Fridge.consume(r, mult);
+          if (!changed) { UI.toast('Списывать нечего: у продуктов в холодильнике не указано количество'); return; }
+          DB.save('fridge'); renderFridge(); if (Router.current() === 'fridge') FridgeView.refresh();
+          UI.toast('Списано из холодильника: ' + changed + ' ' + U.plural(changed, 'продукт', 'продукта', 'продуктов') + ' (' + portions + ' ' + U.plural(portions, 'порция', 'порции', 'порций') + ')',
+            { actionLabel: 'Отменить', onAction: function () { Fridge.restore(snap); renderFridge(); if (Router.current() === 'fridge') FridgeView.refresh(); } });
+        }
+      });
       $$('[data-step]', content).forEach(function (b) {
         b.addEventListener('click', function () { portions = Math.max(1, Math.min(99, portions + Number(b.dataset.step))); renderIng(); });
       });
@@ -3397,6 +3632,262 @@
   })();
 
   /* =======================================================================
+   * UI: Холодильник — что есть дома и что из этого приготовить
+   * ======================================================================= */
+  var FridgeView = (function () {
+    var root = null;
+    var st = { meal: '', respect: true, limit: 12 };
+    var FR_UNITS = ['г', 'кг', 'мл', 'л', 'шт'];
+
+    function expiryHtml(item) {
+      var d = Fridge.daysLeft(item.expires);
+      if (d == null) return '';
+      var txt = d < 0 ? 'просрочено' : d === 0 ? 'годен сегодня' : d === 1 ? 'до завтра' : 'до ' + U.formatDate(item.expires, { day: 'numeric', month: 'short' });
+      return '<span class="fr-exp' + (d < 0 ? ' is-bad' : d <= 2 ? ' is-soon' : '') + '">' + U.esc(txt) + '</span>';
+    }
+    function restrictionsSwitch() {
+      var rs = DB.state.settings.restrictions, dn = Diets.names(rs.diets), exN = rs.excluded.length;
+      if (!dn.length && !exN) return '';
+      var parts = [];
+      if (dn.length) parts.push(dn.length === 1 ? 'диету «' + dn[0] + '»' : 'диеты: ' + dn.join(', '));
+      if (exN) parts.push('исключённые продукты');
+      return UI.switchHtml('fr-respect', 'Учитывать ' + parts.join(' и ') + ' из меню', st.respect);
+    }
+
+    function render() {
+      root = h('<section class="view fridge-view" aria-labelledby="h-fridge">' +
+        '<div class="view-head"><div><h1 id="h-fridge" tabindex="-1">Холодильник</h1><p class="muted" id="fr-count"></p></div>' +
+        '<div class="btn-row wrap"><button type="button" class="btn btn-secondary" data-a="from-shop">Перенести купленное из списка покупок</button>' +
+        '<button type="button" class="btn btn-ghost btn-danger-text" data-a="clear">Очистить холодильник</button></div></div>' +
+        '<form class="card add-item fr-add" novalidate aria-label="Добавить продукт в холодильник">' +
+        '<div class="field ai-name"><label for="fr-name">Продукт</label><input id="fr-name" type="text" placeholder="Например, яйца" maxlength="80"></div>' +
+        '<div class="field ai-amount"><label for="fr-amount">Количество</label><input id="fr-amount" type="text" inputmode="decimal" placeholder="—" aria-describedby="fr-amount-hint"></div>' +
+        '<div class="field ai-unit"><label for="fr-unit">Единица</label><select id="fr-unit">' + FR_UNITS.map(function (u) { return '<option>' + u + '</option>'; }).join('') + '</select></div>' +
+        '<div class="field ai-cat"><label for="fr-exp">Годен до</label><input id="fr-exp" type="date"></div>' +
+        '<button type="submit" class="btn btn-primary ai-submit">Добавить</button>' +
+        '<p class="muted small fr-hint" id="fr-amount-hint">Количество и срок — по желанию. Без количества продукт просто считается «есть».</p></form>' +
+        '<a class="btn btn-secondary btn-block fr-jump" href="#h-fr-match" hidden></a>' +
+        '<div class="fridge-layout">' +
+        '<div class="fr-col-items"><div id="fr-groups"></div>' +
+        '<details class="card fr-pantry"><summary><span class="fr-pantry-title">Всегда есть дома</span> <span class="muted small" id="fr-pantry-sum"></span></summary>' +
+        '<p class="muted small">Эти продукты не нужно добавлять в холодильник — при подборе рецептов они считаются имеющимися.</p>' +
+        '<div id="fr-pantry-cats"></div>' +
+        '<ul class="chip-list" id="fr-pantry-list" aria-label="Продукты, которые всегда есть дома"></ul>' +
+        '<div class="field"><label for="fr-pantry-in">Добавить продукт</label><input id="fr-pantry-in" type="text" placeholder="Например, сахар" maxlength="80"></div></details></div>' +
+        '<section class="card fr-col-match" aria-labelledby="h-fr-match"><h2 class="card-title" id="h-fr-match">Что приготовить</h2>' +
+        '<p class="muted small">Сначала рецепты, для которых всё есть, затем те, где не хватает 1–' + Fridge.MAX_MISSING + ' продуктов.</p>' +
+        '<div class="chips meal-chips" role="group" aria-label="Приём пищи">' +
+        '<button type="button" class="chip" data-meal="">Все</button>' +
+        Models.MEALS.map(function (m) { return '<button type="button" class="chip m-' + m.id + '" data-meal="' + m.id + '">' + m.emoji + ' ' + m.name + '</button>'; }).join('') + '</div>' +
+        restrictionsSwitch() +
+        '<p class="muted small" id="fr-match-count" aria-live="polite"></p><ul class="fr-matches" id="fr-matches"></ul></section>' +
+        '</div></section>');
+
+      /* ---------- добавление ---------- */
+      var picked = null;
+      var nameIn = $('#fr-name', root), amtIn = $('#fr-amount', root), unitSel = $('#fr-unit', root);
+      UI.autocomplete(nameIn, {
+        source: UI.productSource,
+        onPick: function (it) {
+          picked = it.product; nameIn.value = it.label; UI.fieldError(nameIn, null);
+          var u = it.product.units || {};
+          unitSel.value = u['шт'] ? 'шт' : (u['мл'] ? 'мл' : 'г');
+          amtIn.focus();
+        }
+      });
+      nameIn.addEventListener('input', function () { picked = null; });
+      $('.fr-add', root).addEventListener('submit', function (e) {
+        e.preventDefault();
+        var ok = true;
+        var name = nameIn.value.trim();
+        var prod = picked || DB.findProductByName(name);
+        if (!name) ok = UI.fieldError(nameIn, 'Введите название') && ok;
+        else if (!prod) ok = UI.fieldError(nameIn, 'Выберите продукт из подсказок. Нового нет в справочнике — добавьте его в «Настройках».') && ok;
+        else UI.fieldError(nameIn, null);
+        var amt = null;
+        if (amtIn.value.trim() !== '') {
+          amt = U.parseNum(amtIn.value);
+          if (!(amt > 0)) ok = UI.fieldError(amtIn, 'Больше 0 или пусто') && ok; else UI.fieldError(amtIn, null);
+        } else UI.fieldError(amtIn, null);
+        if (!ok) { $('[aria-invalid="true"]', root).focus(); return; }
+        var had = !!Fridge.byProduct(prod.id);
+        Fridge.add({ productId: prod.id, amount: amt, unit: unitSel.value, expires: $('#fr-exp', root).value || null });
+        if (!DB.save('fridge')) return;
+        UI.toast(had ? '«' + prod.name + '» — количество обновлено' : '«' + prod.name + '» теперь в холодильнике');
+        nameIn.value = ''; amtIn.value = ''; $('#fr-exp', root).value = ''; picked = null;
+        nameIn.focus();
+        update();
+      });
+
+      /* ---------- кнопки в шапке ---------- */
+      $('[data-a="from-shop"]', root).addEventListener('click', function () {
+        var bought = DB.state.shopping.filter(function (x) { return x.checked; }).length;
+        if (!bought) { UI.toast('В списке покупок нет отмеченных купленных позиций'); return; }
+        var snapF = Fridge.snapshot(), snapS = U.clone(DB.state.shopping);
+        var res = Fridge.fromShopping();
+        if (!res.moved) { UI.toast('Купленные позиции не найдены в справочнике продуктов: ' + res.skipped.join(', '), { type: 'error' }); return; }
+        DB.save('fridge'); DB.save('shopping'); update();
+        UI.toast('В холодильник: ' + res.moved + ' ' + U.plural(res.moved, 'продукт', 'продукта', 'продуктов') + (res.skipped.length ? '. Без продукта в справочнике остались в списке: ' + res.skipped.join(', ') : ''),
+          { actionLabel: 'Отменить', onAction: function () { DB.state.shopping = snapS; DB.save('shopping'); Fridge.restore(snapF); update(); } });
+      });
+      $('[data-a="clear"]', root).addEventListener('click', function () {
+        var n = Fridge.all().length;
+        if (!n) { UI.toast('Холодильник уже пуст'); return; }
+        UI.confirm({ title: 'Очистить холодильник?', text: 'Все ' + n + ' ' + U.plural(n, 'продукт будет удалён', 'продукта будут удалены', 'продуктов будут удалены') + ' из холодильника.', okText: 'Очистить', danger: true }).then(function (yes) {
+          if (!yes) return;
+          var snap = Fridge.snapshot();
+          DB.state.fridge = []; DB.save('fridge'); update();
+          UI.toast('Холодильник очищен', { actionLabel: 'Отменить', onAction: function () { Fridge.restore(snap); update(); } });
+        });
+      });
+
+      /* ---------- список ---------- */
+      $('#fr-groups', root).addEventListener('click', function (e) {
+        var b = e.target.closest('[data-del]'); if (!b) return;
+        var r = Fridge.remove(b.dataset.del); if (!r) return;
+        var p = DB.product(r.item.productId);
+        DB.save('fridge'); update();
+        var next = $('#fr-groups [data-del]', root); if (next) next.focus(); else nameIn.focus();
+        UI.toast('«' + (p ? p.name : 'Продукт') + '» убран из холодильника', { actionLabel: 'Отменить', onAction: function () {
+          DB.state.fridge.splice(Math.min(r.index, DB.state.fridge.length), 0, r.item); DB.save('fridge'); update();
+        } });
+      });
+
+      /* ---------- «всегда есть дома» ---------- */
+      var pIn = $('#fr-pantry-in', root);
+      UI.autocomplete(pIn, {
+        source: function (q) { return UI.productSource(q).filter(function (it) { return DB.state.settings.pantry.products.indexOf(it.id) < 0; }); },
+        onPick: function (it) {
+          DB.state.settings.pantry.products.push(it.id); pIn.value = '';
+          DB.save('settings'); renderPantry(); updateMatches();
+          UI.toast('«' + it.label + '» — всегда есть дома');
+        }
+      });
+      $('#fr-pantry-list', root).addEventListener('click', function (e) {
+        var b = e.target.closest('[data-pt]'); if (!b) return;
+        var arr = DB.state.settings.pantry.products; arr.splice(arr.indexOf(b.dataset.pt), 1);
+        DB.save('settings'); renderPantry(); updateMatches(); pIn.focus();
+      });
+      $('#fr-pantry-cats', root).addEventListener('click', function (e) {
+        var b = e.target.closest('[data-ptcat]'); if (!b) return;
+        var arr = DB.state.settings.pantry.categories, i = arr.indexOf(b.dataset.ptcat);
+        if (i >= 0) arr.splice(i, 1); else arr.push(b.dataset.ptcat);
+        b.setAttribute('aria-checked', String(i < 0));
+        DB.save('settings'); renderPantry(true); updateMatches();
+      });
+
+      /* ---------- подбор рецептов ---------- */
+      $$('.fr-col-match .meal-chips .chip', root).forEach(function (c) {
+        c.addEventListener('click', function () { st.meal = c.dataset.meal; st.limit = 12; updateMatches(); });
+      });
+      var sw = $('#fr-respect', root);
+      if (sw) sw.addEventListener('click', function () { st.respect = !st.respect; sw.setAttribute('aria-checked', String(st.respect)); st.limit = 12; updateMatches(); });
+      $('#fr-matches', root).addEventListener('click', function (e) {
+        var b = e.target.closest('[data-r]'); if (!b) return;
+        var r = DB.recipe(b.closest('[data-rid]').dataset.rid); if (!r) return;
+        if (b.dataset.r === 'open') RecipesView.openRecipe(r.id);
+        if (b.dataset.r === 'buy') {
+          var n = Fridge.buyMissing(r);
+          if (DB.save('shopping')) UI.toast('В список покупок: ' + n + ' ' + U.plural(n, 'продукт', 'продукта', 'продуктов') + ' для «' + r.title + '»', { actionLabel: 'Открыть список', onAction: function () { location.hash = '#shopping'; } });
+        }
+      });
+      $('.fr-jump', root).addEventListener('click', function (e) {
+        e.preventDefault(); var t = $('#h-fr-match', root);
+        t.scrollIntoView({ behavior: global.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+        t.setAttribute('tabindex', '-1'); t.focus({ preventScroll: true });
+      });
+      $('.fr-col-match', root).addEventListener('click', function (e) {
+        if (e.target.closest('[data-more]')) { st.limit += 12; updateMatches(); }
+      });
+      update();
+      return root;
+    }
+
+    function renderPantry(keepFocus) {
+      var pt = DB.state.settings.pantry;
+      var cats = DB.state.settings.categories.filter(function (c) { return c.id === 'spices' || pt.categories.indexOf(c.id) >= 0; });
+      $('#fr-pantry-cats', root).innerHTML = cats.map(function (c) {
+        return UI.switchHtml('fr-ptc-' + c.id, 'Вся категория «' + c.name + '»', pt.categories.indexOf(c.id) >= 0, ' data-ptcat="' + U.esc(c.id) + '"');
+      }).join('');
+      if (keepFocus) { var f = $('[data-ptcat]', root); if (f && document.activeElement === document.body) f.focus(); }
+      $('#fr-pantry-list', root).innerHTML = pt.products.length ? pt.products.map(function (id) {
+        var p = DB.product(id);
+        return '<li class="chip chip-removable"><span>' + U.esc(p ? p.name : id) + '</span><button type="button" class="chip-x" data-pt="' + U.esc(id) + '" aria-label="Убрать «' + U.esc(p ? p.name : id) + '» из списка «всегда есть дома»">✕</button></li>';
+      }).join('') : '<li class="muted small">Список пуст</li>';
+      var n = pt.products.length, c = pt.categories.length;
+      $('#fr-pantry-sum', root).textContent = '· ' + n + ' ' + U.plural(n, 'продукт', 'продукта', 'продуктов') + (c ? ' и ' + c + ' ' + U.plural(c, 'категория', 'категории', 'категорий') : '');
+    }
+
+    function update() {
+      if (!root) return;
+      var list = Fridge.all();
+      $('#fr-count', root).textContent = list.length ? list.length + ' ' + U.plural(list.length, 'продукт', 'продукта', 'продуктов') + ' дома' : '';
+      $('[data-a="clear"]', root).disabled = !list.length;
+      var box = $('#fr-groups', root);
+      box.innerHTML = '';
+      root.classList.toggle('is-empty', !list.length);
+      if (!list.length) {
+        var bought = DB.state.shopping.filter(function (x) { return x.checked; }).length;
+        box.appendChild(UI.emptyState({ emoji: '🧊', title: 'Холодильник пуст',
+          text: 'Добавьте продукты, которые есть дома, — Foodly! подберёт рецепты, для которых меньше всего нужно докупать.' + (bought ? ' Или перенесите купленное из списка покупок.' : ''),
+          actionLabel: 'Добавить продукт', onAction: function () { $('#fr-name', root).focus(); } }));
+      } else {
+        box.innerHTML = Fridge.grouped().map(function (g) {
+          var gid = 'frg-' + g.id;
+          return '<section class="shop-group card" aria-labelledby="' + gid + '"><h2 class="shop-group-title" id="' + gid + '">' + U.esc(g.name) +
+            ' <span class="count">' + g.items.length + '</span></h2><ul class="shop-items fr-items">' +
+            g.items.map(function (x) {
+              var it = x.item;
+              return '<li class="fr-item"><span class="fr-name">' + U.esc(x.name) + '</span>' +
+                '<span class="fr-meta"><span class="fr-qty' + (it.amount == null ? ' is-any' : '') + '">' + U.esc(Fridge.qtyLabel(it)) + '</span>' + expiryHtml(it) + '</span>' +
+                '<button type="button" class="icon-btn" data-del="' + U.esc(it.id) + '" aria-label="Убрать ' + U.esc(x.name) + ' из холодильника">✕</button></li>';
+            }).join('') + '</ul></section>';
+        }).join('');
+      }
+      renderPantry();
+      updateMatches();
+    }
+
+    function updateMatches() {
+      if (!root) return;
+      $$('.fr-col-match .meal-chips .chip', root).forEach(function (c) { c.setAttribute('aria-pressed', String(c.dataset.meal === st.meal)); });
+      var ul = $('#fr-matches', root), cnt = $('#fr-match-count', root);
+      var more = $('.fr-col-match [data-more]', root); if (more) more.remove();
+      ul.innerHTML = '';
+      $('.fr-jump', root).hidden = true;
+      if (!Fridge.all().length) { cnt.textContent = 'Добавьте продукты — здесь появятся рецепты.'; return; }
+      var res = Fridge.suggestions({ meal: st.meal, respect: st.respect });
+      var full = res.filter(function (x) { return !x.match.missing.length; }).length;
+      if (!res.length) {
+        cnt.textContent = '';
+        ul.innerHTML = '<li class="fr-none"><span class="fr-none-emoji" aria-hidden="true">🤔</span><span><strong>Подходящих рецептов нет.</strong> ' +
+          'Нет рецептов' + (st.meal ? ' для этого приёма пищи' : '') + ', где используются ваши продукты и не хватает не больше ' + Fridge.MAX_MISSING + ' других. Добавьте ещё продукты' +
+          (st.meal ? ', выберите «Все»' : '') + (st.respect && $('#fr-respect', root) ? ' или выключите учёт ограничений из меню' : '') + '.</span></li>';
+        return;
+      }
+      var jump = $('.fr-jump', root);
+      jump.hidden = false; jump.textContent = 'Что приготовить: ' + res.length + ' ' + U.plural(res.length, 'рецепт', 'рецепта', 'рецептов') + (full ? ' (всё есть — ' + full + ')' : '') + ' ↓';
+      cnt.textContent = 'Найдено ' + res.length + ' ' + U.plural(res.length, 'рецепт', 'рецепта', 'рецептов') + (full ? ', из них ' + full + ' — всё есть' : '');
+      ul.innerHTML = res.slice(0, st.limit).map(function (x) {
+        var r = x.recipe, m = x.match;
+        var ps = Nutrition.perServing(r);
+        var miss = m.missing.map(function (y) {
+          return '<span class="fr-miss">' + U.esc(y.name) + (y.partial ? ' <span class="muted">(мало: есть ' + U.esc(Shopping.formatQty(y.haveAmount, y.unit)) + ' из ' + U.esc(Shopping.formatQty(y.amount, y.unit)) + ')</span>' : '') + '</span>';
+        }).join(', ');
+        return '<li class="fr-match' + (m.missing.length ? '' : ' is-full') + '" data-rid="' + U.esc(r.id) + '">' +
+          UI.mediaHtml(r, 'fr-media') +
+          '<div class="fr-match-body"><h3 class="fr-match-title">' + U.esc(r.title) + '</h3>' +
+          '<p class="muted small">' + U.fmt(ps.kcal) + ' ккал на порцию · из холодильника ' + m.have.length + ' из ' + m.total + '</p>' +
+          (m.missing.length ? '<p class="fr-status fr-status-miss"><strong>Не хватает:</strong> ' + miss + '</p>' : '<p class="fr-status fr-status-ok">Есть всё 🎉</p>') +
+          '<div class="btn-row"><button type="button" class="btn btn-secondary btn-sm" data-r="open">Открыть рецепт</button>' +
+          (m.missing.length ? '<button type="button" class="btn btn-primary btn-sm" data-r="buy">Докупить недостающее</button>' : '') + '</div></div></li>';
+      }).join('');
+      if (res.length > st.limit) ul.insertAdjacentElement('afterend', h('<button type="button" class="btn btn-secondary btn-block" data-more>Показать ещё (' + (res.length - st.limit) + ')</button>'));
+    }
+    return { render: render, refresh: update };
+  })();
+
+  /* =======================================================================
    * UI: Меню на неделю (план питания)
    * ======================================================================= */
   var PlanView = (function () {
@@ -3849,7 +4340,7 @@
           try { obj = JSON.parse(reader.result); } catch (err) { UI.toast('Это не JSON-файл или он повреждён.', { type: 'error' }); return; }
           var v = Backup.validate(obj);
           if (!v.ok) { UI.toast(v.error, { type: 'error' }); return; }
-          UI.choose({ title: 'Импорт данных', text: 'В файле: рецептов — ' + v.counts.recipes + ', фото — ' + v.counts.photos + ', продуктов — ' + v.counts.products + ', позиций списка — ' + v.counts.shopping + '.',
+          UI.choose({ title: 'Импорт данных', text: 'В файле: рецептов — ' + v.counts.recipes + ', фото — ' + v.counts.photos + ', продуктов — ' + v.counts.products + ', позиций списка — ' + v.counts.shopping + ', в холодильнике — ' + v.counts.fridge + '.',
             options: [{ value: 'merge', label: 'Объединить', desc: 'Добавить новое, совпадающие рецепты обновить по дате', primary: true },
               { value: 'replace', label: 'Заменить всё', desc: 'Текущие данные будут полностью заменены' }] }).then(function (mode) {
             if (!mode) return;
@@ -3865,7 +4356,7 @@
         reader.readAsText(file);
       });
       $('[data-a="reset"]', root).addEventListener('click', function () {
-        UI.confirm({ title: 'Сбросить к демо-данным?', text: 'Все ваши рецепты, продукты, список покупок и меню будут удалены и заменены демо-набором. Сделайте экспорт, если данные нужны.', okText: 'Сбросить', danger: true }).then(function (yes) {
+        UI.confirm({ title: 'Сбросить к демо-данным?', text: 'Все ваши рецепты, продукты, список покупок, холодильник и меню будут удалены и заменены демо-набором. Сделайте экспорт, если данные нужны.', okText: 'Сбросить', danger: true }).then(function (yes) {
           if (!yes) return;
           Backup.resetDemo().then(function () { Router.refresh(); UI.toast('Восстановлены демо-данные'); });
         });
@@ -4045,12 +4536,13 @@
   })();
 
   /* =======================================================================
-   * UI/Router — hash-роутинг #recipes / #shopping / #plan / #settings
+   * UI/Router — hash-роутинг #recipes / #shopping / #fridge / #plan / #settings
    * ======================================================================= */
   var Router = (function () {
     var routes = {
       recipes: { title: 'Рецепты', view: RecipesView },
       shopping: { title: 'Список покупок', view: ShoppingView },
+      fridge: { title: 'Холодильник', view: FridgeView },
       plan: { title: 'Меню на неделю', view: PlanView },
       settings: { title: 'Настройки', view: SettingsView }
     };

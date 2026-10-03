@@ -739,3 +739,71 @@ select { appearance: none; -webkit-appearance: none; padding-right: 34px; backgr
 .macro-pct { margin: 8px 0 0; }
 .keto-day { margin: 4px 0 8px; color: var(--accent-text); font-weight: 500; }
 .keto-day.is-off { color: var(--warn); }
+
+/* ---------- Холодильник ---------- */
+.fr-add .fr-hint { grid-column: 1 / -1; margin: -2px 0 0; }
+.fr-add input[type="date"] { min-height: 44px; }
+.fridge-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: var(--gap); align-items: start; }
+.fr-col-items { display: flex; flex-direction: column; gap: 14px; }
+#fr-groups { display: flex; flex-direction: column; gap: 14px; }
+.fr-item { display: grid; grid-template-columns: minmax(0, 1fr) auto 44px; gap: 10px; align-items: center; min-height: 48px; padding: 2px 0; border-bottom: 1px solid var(--border); }
+.fr-item:last-child { border-bottom: 0; }
+.fr-name { font-weight: 500; overflow-wrap: anywhere; }
+.fr-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
+.fr-qty { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fr-qty.is-any { color: var(--muted); }
+.fr-exp { font-size: .78rem; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+.fr-exp.is-soon { background: var(--warn-soft); color: var(--warn); }
+.fr-exp.is-bad { background: var(--danger-soft); color: var(--danger); font-weight: 600; }
+.fr-pantry summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; list-style-position: inside; }
+.fr-pantry-title { font-weight: 600; font-size: 1.05rem; }
+.fr-pantry[open] summary { margin-bottom: 8px; }
+.fr-pantry .field { margin-top: 6px; }
+.fr-col-match .meal-chips { margin: 10px 0 4px; display: flex; flex-wrap: wrap; gap: 6px; }
+.fr-col-match .meal-chips .chip { min-height: 36px; padding: 4px 12px; font-size: .85rem; }
+.fr-matches { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.fr-match { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 14px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.fr-match.is-full { border-color: color-mix(in srgb, var(--ok-strong) 55%, var(--border)); background: var(--mint-soft); }
+.fr-media { width: 96px; height: 96px; border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-2); }
+.fr-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.fr-media .ph { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 2.2rem; }
+.fr-match-body { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.fr-match-title { font-size: 1.02rem; margin: 0; overflow-wrap: anywhere; }
+.fr-match-body p { margin: 0; }
+.fr-status { font-size: .9rem; }
+.fr-status-ok { color: var(--ok); font-weight: 600; }
+.fr-status-miss strong { color: var(--accent-ink); }
+.fr-match .btn-row { margin-top: 6px; flex-wrap: wrap; gap: 8px; }
+.fr-none { display: flex; gap: 12px; align-items: flex-start; padding: 16px; border: 2px dashed var(--border); border-radius: var(--radius); }
+.fr-none-emoji { font-size: 1.8rem; line-height: 1; }
+.fr-col-match [data-more] { margin-top: 10px; }
+.rv-fridge { margin: 12px 0 0; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--lunch-soft); color: var(--text); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
+.rv-fridge-actions { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+@media (max-width: 1024px) {
+  .fridge-layout { grid-template-columns: 1fr; }
+}
+@media (max-width: 420px) {
+  .fr-match { grid-template-columns: 64px minmax(0, 1fr); gap: 10px; padding: 10px; }
+  .fr-media { width: 64px; height: 64px; }
+  .fr-match .btn-row .btn { flex: 1 1 auto; }
+  .fr-item { grid-template-columns: minmax(0, 1fr) 44px; }
+  .fr-item .fr-meta { grid-column: 1; grid-row: 2; justify-content: flex-start; }
+  .fr-item .icon-btn { grid-column: 2; grid-row: 1; }
+}
+/* 5 вкладок в таббаре на узком экране */
+@media (max-width: 400px) {
+  .main-nav { padding-left: 2px; padding-right: 2px; }
+  .nav-link { padding-left: 1px; padding-right: 1px; font-size: .66rem; letter-spacing: -.01em; }
+}
+.fr-jump { display: none; margin-bottom: 14px; }
+.fr-jump[hidden] { display: none !important; }
+#h-fr-match:focus { outline: none; }
+@media (max-width: 1024px) {
+  .fr-jump { display: flex; }
+  #h-fr-match { scroll-margin-top: calc(var(--header-h) + 12px); }
+}
+/* Планшет: 5 вкладок в шапке не помещаются — подписи только у текущей (остальные — для экранного диктора) */
+@media (min-width: 761px) and (max-width: 1000px) {
+  .nav-link { padding: 10px 12px; }
+  .nav-link:not([aria-current="page"]) .nav-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+}
