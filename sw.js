@@ -1,6 +1,6 @@
 /* Foodly! — сервис-воркер: precache оболочки + stale-while-revalidate для CDN */
 'use strict';
-var VERSION = 'foodly-v1.9.1';
+var VERSION = 'foodly-v2.0.0';
 var PRECACHE = VERSION + '-precache';
 var RUNTIME = VERSION + '-runtime';
 var IMAGES = 'foodly-images';        // фото по ссылкам: не версионируется, чтобы не терять их при обновлении
@@ -11,10 +11,8 @@ var APP_FILES = [
   'style.css',
   'app.js',
   'manifest.webmanifest',
-  'fonts/Geist-Regular.woff',
-  'fonts/Geist-Medium.woff',
-  'fonts/Geist-SemiBold.woff',
-  'fonts/Geist-Bold.woff',
+  'fonts/Nunito-cyrillic.woff2',
+  'fonts/Nunito-latin.woff2',
   'fonts/geist-pdf.js',
   'icons/icon-192.png',
   'icons/icon-512.png',
