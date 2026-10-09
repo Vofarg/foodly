@@ -1382,12 +1382,47 @@
       DB.state.fridge = all().filter(function (x) { return !(changed[x.id] && x.amount != null && x.amount <= EPS); });
       return Object.keys(changed).length;
     }
+    function shopProduct(it) { return it.productId ? DB.product(it.productId) : DB.findProductByName(it.name); }
+    /* Галка в списке покупок → продукт на полку. На позиции запоминаем, что положили (it.fridge),
+       чтобы снятие галки убрало ровно это. → {product, created} | {skipped: 'unknown'|'pantry'|'linked'} */
+    function checkIn(it) {
+      if (it.fridge) return { skipped: 'linked' };
+      var p = shopProduct(it);
+      if (!p) return { skipped: 'unknown' };
+      if (isPantry(p.id)) return { skipped: 'pantry', product: p };
+      var had = byProduct(p.id);
+      var wasAny = !!(had && had.amount == null);
+      var amount = it.unit === 'по вкусу' ? null : it.amount;
+      var n = normAmount(amount, it.unit, p);
+      add({ productId: p.id, amount: amount, unit: it.unit });
+      it.fridge = { productId: p.id, amount: n.amount, unit: n.unit, created: !had, wasAny: wasAny };
+      return { product: p, created: !had };
+    }
+    /* Галку сняли — убираем с полки то, что положили по этой позиции. → true, если холодильник изменился */
+    function checkOut(it) {
+      var link = it.fridge; if (!link) return false;
+      delete it.fridge;
+      var ex = byProduct(link.productId); if (!ex) return false;
+      var p = DB.product(link.productId);
+      function drop() { DB.state.fridge = all().filter(function (x) { return x !== ex; }); return true; }
+      if (link.wasAny) { ex.amount = null; return true; }   // до покупки было просто «есть»
+      if (link.amount == null || ex.amount == null) return link.created ? drop() : false;
+      var c = ex.unit === link.unit ? link.amount : Shopping.convert(link.amount, link.unit, ex.unit, p);
+      if (c == null) return link.created ? drop() : false;
+      ex.amount = U.round(ex.amount - c, 3);
+      if (ex.amount <= EPS) return drop();
+      return true;
+    }
+    /* Отмеченные раньше (до связки списка с холодильником) и ещё не положенные на полку */
+    function pendingFromShopping() {
+      return DB.state.shopping.filter(function (it) { if (!it.checked || it.fridge) return false; var p = shopProduct(it); return !!(p && !isPantry(p.id)); });
+    }
     /* Купленное из списка покупок → в холодильник (суммируя). Позиции без продукта из справочника пропускаем */
     function fromShopping() {
       var moved = 0, skipped = [], movedIds = {};
       DB.state.shopping.forEach(function (it) {
-        if (!it.checked) return;
-        var p = it.productId ? DB.product(it.productId) : DB.findProductByName(it.name);
+        if (!it.checked || it.fridge) return;
+        var p = shopProduct(it);
         if (!p) { skipped.push(it.name); return; }
         add({ productId: p.id, amount: it.unit === 'по вкусу' ? null : it.amount, unit: it.unit });
         movedIds[it.id] = true; moved++;
@@ -1408,6 +1443,7 @@
     }
     return { all: all, byProduct: byProduct, isPantry: isPantry, add: add, remove: remove, snapshot: snapshot, restore: restore,
       match: match, suggestions: suggestions, buyMissing: buyMissing, consume: consume, fromShopping: fromShopping,
+      checkIn: checkIn, checkOut: checkOut, pendingFromShopping: pendingFromShopping,
       qtyLabel: qtyLabel, grouped: grouped, daysLeft: daysLeft, MAX_MISSING: MAX_MISSING };
   })();
   Foodly.Fridge = Fridge;
@@ -3595,7 +3631,20 @@
         var li = e.target.closest('[data-id]'); if (!li) return;
         var it = DB.state.shopping.filter(function (x) { return x.id === li.dataset.id; })[0]; if (!it) return;
         if (e.target.matches('.shop-check')) {
-          it.checked = e.target.checked; DB.save('shopping'); updateList(it.id, '.shop-check');
+          it.checked = e.target.checked;
+          var res = null, out = false;
+          if (it.checked) res = Fridge.checkIn(it); else out = Fridge.checkOut(it);
+          DB.save('fridge'); DB.save('shopping'); updateList(it.id, '.shop-check');
+          if (res && res.product) {
+            if (res.skipped) return;                       // «всегда есть дома» — на полку не кладём
+            UI.toast('«' + res.product.name + '» — в холодильнике', { actionLabel: 'Не добавлять', onAction: function () {
+              if (Fridge.checkOut(it)) { DB.save('fridge'); DB.save('shopping'); UI.toast('«' + res.product.name + '» убрано из холодильника'); }
+            } });
+          } else if (res && res.skipped === 'unknown') {
+            UI.toast('«' + it.name + '» нет в справочнике продуктов — в холодильник не добавлено');
+          } else if (out) {
+            UI.toast('«' + it.name + '» убрано из холодильника');
+          }
         } else if (e.target.matches('.qty-input') || e.target.matches('.qty-unit')) {
           var inp = $('.qty-input', li), sel = $('.qty-unit', li);
           var v = U.parseNum(inp.value);
@@ -3603,6 +3652,7 @@
           inp.removeAttribute('aria-invalid');
           var b = Shopping.toBase(v, sel.value, it.productId ? DB.product(it.productId) : null);
           it.amount = b.amount; it.unit = b.unit;
+          if (it.fridge) { Fridge.checkOut(it); Fridge.checkIn(it); DB.save('fridge'); }   // на полке — новое количество
           DB.save('shopping'); updateList(it.id, e.target.matches('.qty-unit') ? '.qty-unit' : '.qty-input');
         }
       });
@@ -3778,8 +3828,8 @@
 
       /* ---------- кнопки в шапке ---------- */
       $('[data-a="from-shop"]', root).addEventListener('click', function () {
-        var bought = DB.state.shopping.filter(function (x) { return x.checked; }).length;
-        if (!bought) { UI.toast('В списке покупок нет отмеченных купленных позиций'); return; }
+        var bought = Fridge.pendingFromShopping().length;
+        if (!bought) { UI.toast('Всё купленное уже в холодильнике'); return; }
         var snapF = Fridge.snapshot(), snapS = U.clone(DB.state.shopping);
         var res = Fridge.fromShopping();
         if (!res.moved) { UI.toast('Купленные позиции не найдены в справочнике продуктов: ' + res.skipped.join(', '), { type: 'error' }); return; }
@@ -3883,10 +3933,11 @@
       var box = $('#fr-groups', root);
       box.innerHTML = '';
       root.classList.toggle('is-empty', !list.length);
+      var bought = Fridge.pendingFromShopping().length;
+      $('[data-a="from-shop"]', root).hidden = !bought;
       if (!list.length) {
-        var bought = DB.state.shopping.filter(function (x) { return x.checked; }).length;
         box.appendChild(UI.emptyState({ emoji: '🧊', title: 'Холодильник пуст',
-          text: 'Добавьте продукты, которые есть дома, — Foodly! подберёт рецепты, для которых меньше всего нужно докупать.' + (bought ? ' Или перенесите купленное из списка покупок.' : ''),
+          text: 'Добавьте продукты, которые есть дома, — Foodly! подберёт рецепты, для которых меньше всего нужно докупать. Отмеченное в списке покупок попадает сюда само.' + (bought ? ' Или перенесите купленное раньше.' : ''),
           actionLabel: 'Добавить продукт', onAction: function () { $('#fr-name', root).focus(); } }));
       } else {
         box.innerHTML = Fridge.grouped().map(function (g) {
