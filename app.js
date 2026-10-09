@@ -718,6 +718,7 @@
     function defaultSettings() {
       return {
         theme: null,
+        accent: 'coral',
         profile: { sex: 'female', age: 30, height: 165, weight: 62, activity: 1.375, goal: 'maintain' },
         targets: null, targetsManual: false,
         restrictions: { excluded: [], diets: [], moreProtein: false, moreFiber: false },
@@ -753,8 +754,10 @@
       state.fridge = [];
       state.plan = null;
       var theme = state.settings ? state.settings.theme : null;
+      var accent = state.settings ? state.settings.accent : null;
       state.settings = Models.defaultSettings();
       state.settings.theme = theme;
+      if (accent) state.settings.accent = accent;
     }
     function ensureIntegrity() {
       var s = state.settings || {};
@@ -792,6 +795,7 @@
       if (!meta) {
         seed();
         state.settings.theme = Storage.get('theme', null);
+        if (Storage.get('accent', null)) state.settings.accent = Storage.get('accent', null);
         ensureIntegrity();
         rebuildIndex();
         saveAll();
@@ -2451,7 +2455,7 @@
       }
       root.setAttribute('data-theme', t);
       var meta = $('meta[name="theme-color"]');
-      if (meta) meta.setAttribute('content', t === 'dark' ? '#1a1a1d' : '#f8f6fd');
+      if (meta) meta.setAttribute('content', t === 'dark' ? '#19181c' : '#fcf9f8');
       $$('[data-theme-toggle]').forEach(function (b) {
         b.setAttribute('aria-checked', t === 'dark' ? 'true' : 'false');
         b.setAttribute('aria-label', t === 'dark' ? 'Тёмная тема включена' : 'Тёмная тема выключена');
@@ -2464,14 +2468,42 @@
       apply(t, true);
     }
     function toggle() { set(current() === 'dark' ? 'light' : 'dark'); }
+    // Акцентный цвет: пресеты в меру яркие, у каждого проверен контраст (см. style.css)
+    var ACCENTS = [
+      { id: 'coral', name: 'Коралл', sw: '#f2734a', sw2: '#ff9a6b' },
+      { id: 'raspberry', name: 'Малина', sw: '#e8557a', sw2: '#ff8fa3' },
+      { id: 'violet', name: 'Лаванда', sw: '#8b6cf0', sw2: '#b59cff' },
+      { id: 'sky', name: 'Небо', sw: '#3b9be0', sw2: '#6cc3f0' },
+      { id: 'emerald', name: 'Мята', sw: '#2fb38a', sw2: '#6fd3a8' }
+    ];
+    var DEFAULT_ACCENT = 'coral';
+    function validAccent(a) { return ACCENTS.some(function (x) { return x.id === a; }) ? a : DEFAULT_ACCENT; }
+    function accent() { return validAccent(document.documentElement.getAttribute('data-accent')); }
+    function applyAccent(a, animate) {
+      var root = document.documentElement;
+      if (animate) {
+        root.classList.add('theme-anim');
+        setTimeout(function () { root.classList.remove('theme-anim'); }, 450);
+      }
+      root.setAttribute('data-accent', validAccent(a));
+    }
+    function setAccent(a) {
+      a = validAccent(a);
+      Storage.set('accent', a);
+      DB.state.settings.accent = a;
+      DB.save('settings');
+      applyAccent(a, true);
+    }
     function init() {
+      applyAccent(Storage.get('accent', null) || (DB.state.settings && DB.state.settings.accent), false);
       var saved = Storage.get('theme', null);
       apply(saved === 'dark' || saved === 'light' ? saved : (mq && mq.matches ? 'dark' : 'light'), false);
       if (mq && mq.addEventListener) mq.addEventListener('change', function (e) {
         if (!Storage.get('theme', null)) apply(e.matches ? 'dark' : 'light', true);
       });
     }
-    return { init: init, toggle: toggle, set: set, current: current, apply: apply };
+    return { init: init, toggle: toggle, set: set, current: current, apply: apply,
+      ACCENTS: ACCENTS, accent: accent, applyAccent: applyAccent, setAccent: setAccent };
   })();
   Foodly.Theme = Theme;
 
@@ -4331,7 +4363,12 @@
         '<div class="settings-grid">' +
         '<section class="card" aria-labelledby="st-theme"><h2 class="card-title" id="st-theme">Оформление</h2>' +
         UI.switchHtml('set-dark', 'Тёмная тема', Theme.current() === 'dark', ' data-theme-toggle') +
-        '<p class="muted small">При первом запуске тема берётся из настроек системы.</p></section>' +
+        '<p class="muted small">При первом запуске тема берётся из настроек системы.</p>' +
+        '<fieldset class="accent-picker"><legend>Акцентный цвет</legend><div class="accent-opts">' +
+        Theme.ACCENTS.map(function (a) {
+          return '<label class="accent-opt" style="--sw:' + a.sw + ';--sw-2:' + a.sw2 + '"><input type="radio" name="accent" value="' + a.id + '"' + (Theme.accent() === a.id ? ' checked' : '') + '>' +
+            '<span class="accent-dot" aria-hidden="true"></span><span class="accent-name">' + a.name + '</span></label>';
+        }).join('') + '</div></fieldset></section>' +
         '<section class="card" aria-labelledby="st-data"><h2 class="card-title" id="st-data">Данные и резервная копия</h2>' +
         '<p class="muted small">Всё хранится только в этом браузере. Сохраните JSON-копию, чтобы перенести данные на другое устройство.</p>' +
         '<div class="btn-col"><button type="button" class="btn btn-secondary" data-a="export">Экспорт данных (JSON)</button>' +
@@ -4348,6 +4385,9 @@
         '</div></section>');
       var dark = $('#set-dark', root);
       dark.addEventListener('click', function () { Theme.toggle(); });
+      $$('input[name="accent"]', root).forEach(function (inp) {
+        inp.addEventListener('change', function () { if (inp.checked) Theme.setAccent(inp.value); });
+      });
       $('[data-a="export"]', root).addEventListener('click', function (e) {
         var btn = e.currentTarget; btn.disabled = true;
         Backup.exportJSON().then(function (r) {
@@ -4373,6 +4413,7 @@
               if (!ok) return;
               Theme.apply(DB.state.settings.theme === 'dark' || DB.state.settings.theme === 'light' ? DB.state.settings.theme : Theme.current());
               if (DB.state.settings.theme) Storage.set('theme', DB.state.settings.theme);
+              if (DB.state.settings.accent) { Storage.set('accent', DB.state.settings.accent); Theme.applyAccent(DB.state.settings.accent); }
               UI.toast(mode === 'merge' ? 'Данные объединены' : 'Данные восстановлены из копии');
               Router.refresh();
             }).catch(function (err) { UI.toast('Импорт не удался: ' + (err && err.message || err), { type: 'error' }); });

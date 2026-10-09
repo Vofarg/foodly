@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="ru" data-theme="light">
+<html lang="ru" data-theme="light" data-accent="coral">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Foodly!</title>
   <meta name="description" content="Foodly! — рецепты с КБЖУ, список покупок, холодильник, план питания на неделю и экспорт списка в PDF.">
-  <meta name="theme-color" content="#f8f6fd">
+  <meta name="theme-color" content="#fcf9f8">
   <meta name="color-scheme" content="light dark">
   <!-- Тема применяется до первой отрисовки — без вспышки -->
   <script>
@@ -14,8 +14,12 @@
       try { t = JSON.parse(localStorage.getItem('foodly:v1:theme')); } catch (e) {}
       if (t !== 'dark' && t !== 'light') t = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
       document.documentElement.setAttribute('data-theme', t);
+      var a = null;
+      try { a = JSON.parse(localStorage.getItem('foodly:v1:accent')); } catch (e) {}
+      if (['coral', 'raspberry', 'violet', 'sky', 'emerald'].indexOf(a) < 0) a = 'coral';
+      document.documentElement.setAttribute('data-accent', a);
       var m = document.querySelector('meta[name="theme-color"]');
-      if (m) m.setAttribute('content', t === 'dark' ? '#1a1a1d' : '#f8f6fd');
+      if (m) m.setAttribute('content', t === 'dark' ? '#19181c' : '#fcf9f8');
     })();
   </script>
   <link rel="manifest" href="manifest.webmanifest">
@@ -23,6 +27,7 @@
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Foodly!">
+  <link rel="preload" href="fonts/Nunito-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -32,7 +37,7 @@
       <div class="header-inner">
         <a class="logo" href="#recipes" aria-label="Foodly! — на главную">
           <span class="logo-mark" aria-hidden="true">
-            <svg viewBox="0 0 32 32" width="32" height="32"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f28c28"/><stop offset=".55" stop-color="#8b5cf6"/><stop offset="1" stop-color="#3a9ad9"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#lg)"/><path d="M8 15.5h16a8 8 0 0 1-16 0Z" fill="#fff"/><path d="M13 12.5c0-2 1.5-2.5 1.5-4.5M18 12.5c0-2 1.5-2.5 1.5-4.5" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
+            <svg viewBox="0 0 32 32" width="32" height="32"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" style="stop-color: var(--a-2)"/><stop offset="1" style="stop-color: var(--a-strong)"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#lg)"/><path d="M8 15.5h16a8 8 0 0 1-16 0Z" fill="#fff"/><path d="M13 12.5c0-2 1.5-2.5 1.5-4.5M18 12.5c0-2 1.5-2.5 1.5-4.5" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
           </span>
           <span class="logo-text">Foodly<span class="logo-bang">!</span></span>
         </a>
