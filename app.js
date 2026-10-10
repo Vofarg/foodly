@@ -1700,8 +1700,81 @@
       });
       return n;
     }
+    /* ---------- ключ в резервной копии ----------
+       Ключ (с моделью, адресом и лимитом) шифруется паролем прямо в браузере: PBKDF2‑SHA‑256 → AES‑GCM‑256.
+       В файл копии попадает только зашифрованный блок, без пароля его не прочитать. */
+    var KDF_ITER = 310000;
+    function canEncrypt() { return !!(global.crypto && crypto.subtle && global.TextEncoder); }
+    function toB64(buf) { var b = new Uint8Array(buf), s = ''; for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s); }
+    function fromB64(str) { var s = atob(str), b = new Uint8Array(s.length); for (var i = 0; i < s.length; i++) b[i] = s.charCodeAt(i); return b; }
+    function deriveKey(password, salt, iter) {
+      return crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']).then(function (base) {
+        return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: salt, iterations: iter, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      });
+    }
+    function encryptSecret(password) {
+      var c = cfg();
+      var salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+      var plain = new TextEncoder().encode(JSON.stringify({ key: c.key, model: c.model, url: c.url, dailyLimit: c.dailyLimit }));
+      return deriveKey(password, salt, KDF_ITER).then(function (k) { return crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, k, plain); })
+        .then(function (ct) { return { v: 1, kdf: 'PBKDF2-SHA256', iter: KDF_ITER, cipher: 'AES-GCM', salt: toB64(salt), iv: toB64(iv), data: toB64(ct) }; });
+    }
+    function isSecret(x) { return !!(x && typeof x === 'object' && x.v === 1 && typeof x.salt === 'string' && typeof x.iv === 'string' && typeof x.data === 'string'); }
+    /* → Promise<{key, model, url, dailyLimit}>; неверный пароль → ошибка kind 'password' */
+    function decryptSecret(sec, password) {
+      if (!canEncrypt()) return Promise.reject(aiError('crypto', 'Этот браузер не умеет расшифровывать ключ.'));
+      return Promise.resolve().then(function () {
+        var iter = Math.min(5000000, Math.max(1000, Number(sec.iter) || KDF_ITER));
+        return deriveKey(password, fromB64(sec.salt), iter).then(function (k) { return crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(sec.iv) }, k, fromB64(sec.data)); });
+      }).then(function (pt) {
+        var o = JSON.parse(new TextDecoder().decode(pt));
+        if (!o || typeof o.key !== 'string' || !o.key) throw new Error('empty');
+        return { key: o.key, model: o.model, url: typeof o.url === 'string' && /^https:\/\//i.test(o.url) ? o.url : DEFAULT_URL, dailyLimit: Number(o.dailyLimit) >= 0 ? Number(o.dailyLimit) : DEFAULTS.dailyLimit };
+      }).catch(function () { throw aiError('password', 'Неверный пароль.'); });
+    }
+    /* Окно ввода пароля. o: {title, text, confirm (повтор пароля), okText, skipText, check(pw) → Promise<true | текст ошибки>}
+       → Promise<пароль | null> */
+    function passwordPrompt(o) {
+      return new Promise(function (resolve) {
+        var content = h('<form class="pw-form" novalidate><p class="muted"></p>' +
+          '<div class="field"><label for="pw-1">Пароль</label><input id="pw-1" type="password" autocomplete="' + (o.confirm ? 'new-password' : 'current-password') + '" autofocus></div>' +
+          (o.confirm ? '<div class="field"><label for="pw-2">Пароль ещё раз</label><input id="pw-2" type="password" autocomplete="new-password"></div>' : '') +
+          '<p class="muted small">' + (o.confirm ? 'Не меньше 6 символов. Пароль нигде не сохраняется — без него ключ из копии не восстановить.' : '') + '</p></form>');
+        $('p.muted', content).textContent = o.text || '';
+        var foot = h('<div class="btn-row"><button type="button" class="btn btn-ghost" data-v="0"></button><button type="button" class="btn btn-primary" data-v="1"></button></div>');
+        foot.children[0].textContent = o.skipText || 'Отмена';
+        foot.children[1].textContent = o.okText || 'Готово';
+        var result = null, busy = false;
+        var m = UI.modal({ title: o.title, content: content, footer: foot, size: 'sm', onClose: function () { resolve(result); } });
+        var p1 = $('#pw-1', content), p2 = $('#pw-2', content);
+        function submit() {
+          if (busy) return;
+          var pw = p1.value;
+          if (o.confirm) {
+            if (pw.length < 6) { UI.fieldError(p1, 'Не меньше 6 символов'); p1.focus(); return; }
+            UI.fieldError(p1, null);
+            if (p2.value !== pw) { UI.fieldError(p2, 'Пароли не совпадают'); p2.focus(); return; }
+            UI.fieldError(p2, null);
+          } else if (!pw) { UI.fieldError(p1, 'Введите пароль'); p1.focus(); return; }
+          if (!o.check) { result = pw; m.close(); return; }
+          busy = true; foot.children[1].disabled = true;
+          o.check(pw).then(function (res) {
+            busy = false; foot.children[1].disabled = false;
+            if (res === true) { result = pw; m.close(); return; }
+            UI.fieldError(p1, String(res)); p1.select(); p1.focus();
+          });
+        }
+        content.addEventListener('submit', function (e) { e.preventDefault(); submit(); });
+        [p1, p2].forEach(function (inp) { if (inp) inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } }); });
+        foot.addEventListener('click', function (e) {
+          var b = e.target.closest('[data-v]'); if (!b) return;
+          if (b.dataset.v === '1') submit(); else m.close();
+        });
+      });
+    }
     return { MODELS: MODELS, DEFAULT_URL: DEFAULT_URL, cfg: cfg, save: save, hasKey: hasKey, usedToday: usedToday, maskKey: maskKey,
-      context: context, normalize: normalize, recipes: recipes, test: test, saveRecipe: saveRecipe, buyMissing: buyMissing, SYSTEM: SYSTEM };
+      context: context, normalize: normalize, recipes: recipes, test: test, saveRecipe: saveRecipe, buyMissing: buyMissing, SYSTEM: SYSTEM,
+      canEncrypt: canEncrypt, encryptSecret: encryptSecret, decryptSecret: decryptSecret, isSecret: isSecret, passwordPrompt: passwordPrompt };
   })();
   Foodly.AI = AI;
 
@@ -2340,8 +2413,10 @@
    * ======================================================================= */
   var Backup = (function () {
     /* Экспорт: все данные + фото из IndexedDB (как data: URL, только те, на которые ссылаются рецепты) */
-    function exportJSON() {
+    /* opts.ai — зашифрованный ключ ИИ‑помощника (AI.encryptSecret), кладётся в копию отдельным полем */
+    function exportJSON(opts) {
       var data = DB.exportData();
+      if (opts && opts.ai) data.ai = opts.ai;
       var ref = {};
       DB.state.recipes.forEach(function (r) { if (r.photoId) ref[r.photoId] = true; });
       var photosP = PhotoStore.isAvailable() ? PhotoStore.all() : Promise.resolve([]);
@@ -2392,7 +2467,7 @@
       });
       if (errs.length) return { ok: false, error: 'Файл повреждён: ' + errs.slice(0, 3).join('; ') + (errs.length > 3 ? ' и ещё ' + (errs.length - 3) : '') + '.' };
       var data = Storage.migrate(U.clone(d), v);
-      return { ok: true, data: data, counts: { recipes: (data.recipes || []).length, products: (data.products || []).length, shopping: (data.shopping || []).length, fridge: (data.fridge || []).length,
+      return { ok: true, data: data, ai: AI.isSecret(obj.ai) ? obj.ai : null, counts: { recipes: (data.recipes || []).length, products: (data.products || []).length, shopping: (data.shopping || []).length, fridge: (data.fridge || []).length,
         photos: (data.photos || []).length + (data.recipes || []).filter(function (r) { return typeof r.photo === 'string' && r.photo.indexOf('data:') === 0; }).length } };
     }
     function mergeById(cur, inc, preferIncoming) {
@@ -4796,9 +4871,22 @@
         inp.addEventListener('change', function () { if (inp.checked) Theme.setAccent(inp.value); });
       });
       $('[data-a="export"]', root).addEventListener('click', function (e) {
-        var btn = e.currentTarget; btn.disabled = true;
-        Backup.exportJSON().then(function (r) {
-          UI.toast('Резервная копия сохранена: ' + r.name + (r.photos ? ' (с фото: ' + r.photos + ', ' + U.fmt(r.bytes / 1024 / 1024, 1) + ' МБ)' : ''));
+        var btn = e.currentTarget;
+        // ключ ИИ‑помощника — только по желанию и только под паролем
+        var withKey = AI.hasKey() && AI.canEncrypt() ? UI.choose({ title: 'Экспорт данных', text: 'Добавить в копию ключ ИИ‑помощника? Тогда на другом устройстве его не придётся вводить заново.',
+          options: [{ value: 'key', label: 'С ключом под паролем', desc: 'Ключ зашифруется паролем; при импорте Foodly! спросит этот пароль', primary: true },
+            { value: 'plain', label: 'Без ключа', desc: 'Ключ останется только в этом браузере' }] }) : Promise.resolve('plain');
+        withKey.then(function (mode) {
+          if (!mode) return null;
+          if (mode === 'plain') return {};
+          return AI.passwordPrompt({ title: 'Пароль для ключа', text: 'Придумайте пароль: им зашифруется ключ ProxyAPI в файле копии.', confirm: true, okText: 'Экспортировать' })
+            .then(function (pw) { return pw ? AI.encryptSecret(pw).then(function (sec) { return { ai: sec }; }) : null; });
+        }).then(function (opts) {
+          if (!opts) return;
+          btn.disabled = true;
+          return Backup.exportJSON(opts).then(function (r) {
+            UI.toast('Резервная копия сохранена: ' + r.name + (r.photos ? ' (с фото: ' + r.photos + ', ' + U.fmt(r.bytes / 1024 / 1024, 1) + ' МБ)' : '') + (opts.ai ? '. Ключ ИИ — под паролем' : ''));
+          });
         }).catch(function (err) { UI.toast('Не удалось экспортировать: ' + (err && err.message || err), { type: 'error' }); })
           .then(function () { btn.disabled = false; });
       });
@@ -4812,12 +4900,23 @@
           try { obj = JSON.parse(reader.result); } catch (err) { UI.toast('Это не JSON-файл или он повреждён.', { type: 'error' }); return; }
           var v = Backup.validate(obj);
           if (!v.ok) { UI.toast(v.error, { type: 'error' }); return; }
-          UI.choose({ title: 'Импорт данных', text: 'В файле: рецептов — ' + v.counts.recipes + ', фото — ' + v.counts.photos + ', продуктов — ' + v.counts.products + ', позиций списка — ' + v.counts.shopping + ', в холодильнике — ' + v.counts.fridge + '.',
+          UI.choose({ title: 'Импорт данных', text: 'В файле: рецептов — ' + v.counts.recipes + ', фото — ' + v.counts.photos + ', продуктов — ' + v.counts.products + ', позиций списка — ' + v.counts.shopping + ', в холодильнике — ' + v.counts.fridge + (v.ai ? ', ключ ИИ‑помощника (под паролем)' : '') + '.',
             options: [{ value: 'merge', label: 'Объединить', desc: 'Добавить новое, совпадающие рецепты обновить по дате', primary: true },
               { value: 'replace', label: 'Заменить всё', desc: 'Текущие данные будут полностью заменены' }] }).then(function (mode) {
             if (!mode) return;
             Backup.importData(v.data, mode).then(function (ok) {
               if (!ok) return;
+              if (v.ai && AI.canEncrypt()) {
+                var restored = false;
+                return AI.passwordPrompt({ title: 'Ключ ИИ‑помощника', text: 'В копии есть ключ ProxyAPI под паролем. Введите пароль, чтобы восстановить его в этом браузере.' + (AI.hasKey() ? ' Текущий ключ будет заменён.' : ''),
+                  okText: 'Восстановить ключ', skipText: 'Пропустить',
+                  check: function (pw) { return AI.decryptSecret(v.ai, pw).then(function (c) { restored = AI.save(c); return true; }, function (err) { return err.message; }); } })
+                  .then(function () { return { ok: ok, key: restored }; });
+              }
+              return { ok: ok };
+            }).then(function (res) {
+              if (!res || !res.ok) return;
+              if (res.key) UI.toast('Ключ ИИ‑помощника восстановлен');
               Theme.apply(DB.state.settings.theme === 'dark' || DB.state.settings.theme === 'light' ? DB.state.settings.theme : Theme.current());
               if (DB.state.settings.theme) Storage.set('theme', DB.state.settings.theme);
               if (DB.state.settings.accent) { Storage.set('accent', DB.state.settings.accent); Theme.applyAccent(DB.state.settings.accent); }
@@ -4864,7 +4963,7 @@
         '<form id="ai-form" novalidate>' +
         '<div class="field"><label for="ai-key">Ключ ProxyAPI</label><div class="ai-key-row"><input id="ai-key" type="password" autocomplete="off" spellcheck="false" placeholder="' + (c.key ? U.esc(AI.maskKey(c.key)) + ' — сохранён' : 'sk-…') + '" aria-describedby="ai-key-hint">' +
         '<button type="button" class="btn btn-ghost btn-sm" data-ai="show" aria-pressed="false">Показать</button></div>' +
-        '<p class="muted small" id="ai-key-hint">' + (c.key ? 'Ключ сохранён. Чтобы заменить, введите новый.' : 'Ключ хранится только в этом браузере и не попадает в резервную копию.') + '</p></div>' +
+        '<p class="muted small" id="ai-key-hint">' + (c.key ? 'Ключ сохранён. Чтобы заменить, введите новый.' : 'Ключ хранится только в этом браузере. В резервную копию он попадает только по желанию и под паролем.') + '</p></div>' +
         '<div class="field"><label for="ai-model">Модель</label><select id="ai-model">' + AI.MODELS.map(function (m) {
           return '<option value="' + m.id + '"' + (m.id === c.model ? ' selected' : '') + '>' + U.esc(m.name + ' — ' + m.note) + '</option>';
         }).join('') + '</select></div>' +
@@ -4920,7 +5019,7 @@
         UI.confirm({ title: 'Удалить ключ?', text: 'Ключ ProxyAPI будет удалён из этого браузера. ИИ‑помощник перестанет работать, пока вы не введёте ключ снова.', okText: 'Удалить', danger: true }).then(function (yes) {
           if (!yes) return;
           AI.save({ key: '' });
-          keyIn.value = ''; keyIn.placeholder = 'sk-…'; $('#ai-key-hint', root).textContent = 'Ключ хранится только в этом браузере и не попадает в резервную копию.';
+          keyIn.value = ''; keyIn.placeholder = 'sk-…'; $('#ai-key-hint', root).textContent = 'Ключ хранится только в этом браузере. В резервную копию он попадает только по желанию и под паролем.';
           $('[data-ai="del"]', root).hidden = true; say('Ключ удалён.'); keyIn.focus();
         });
       });
