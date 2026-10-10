@@ -950,3 +950,31 @@ input[type="search"] { border-radius: 999px; padding-left: 18px; }
 .accent-opt input:checked + .accent-dot::after { transform: scale(1); }
 .accent-opt input:checked ~ .accent-name { color: var(--text); }
 .accent-opt input:focus-visible + .accent-dot { outline: 3px solid var(--focus); outline-offset: 5px; }
+
+/* ===== v2.2 — ИИ‑помощник ===== */
+.fr-ai { margin: 12px 0 14px; padding: 14px; border-radius: var(--radius); background: var(--accent-soft); display: flex; flex-direction: column; gap: 8px; }
+.fr-ai-note { margin: 0; }
+.fr-ai-note a, .fr-ai-error a:not(.btn) { color: var(--link); font-weight: 600; }
+.fr-ai-status { display: flex; align-items: center; gap: 10px; margin: 4px 0 0; font-weight: 600; }
+.fr-ai-spin { width: 18px; height: 18px; flex: none; border-radius: 50%; border: 3px solid color-mix(in srgb, var(--link) 25%, transparent); border-top-color: var(--link); animation: fr-ai-spin .9s linear infinite; }
+@keyframes fr-ai-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .fr-ai-spin { animation-duration: 3s; } }
+.fr-ai-error { padding: 12px; border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--text); display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.fr-ai-error p { margin: 0; }
+.fr-ai-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.fr-ai-title { margin: 0; font-size: 1.02rem; }
+.fr-ai-list { margin-top: 0; }
+.fr-ai-card { background: var(--surface); }
+.fr-ai-why { color: var(--text); font-style: italic; }
+.fr-ai-more summary { cursor: pointer; font-weight: 600; font-size: .875rem; color: var(--link); padding: 4px 0; }
+.fr-ai-ings, .fr-ai-steps { margin: 6px 0; padding-left: 20px; }
+.fr-ai-ings li.is-have::marker { content: '✓ '; color: var(--ok-strong); }
+.fr-ai-steps li + li { margin-top: 4px; }
+.ai-key-row { display: flex; gap: 8px; align-items: center; }
+.ai-key-row input { flex: 1; min-width: 0; }
+.ai-adv { margin: 4px 0 12px; }
+.ai-adv summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.ai-adv .field { margin-top: 8px; }
+#ai-status:empty { display: none; }
+#ai-status { margin: 8px 0 0; font-weight: 600; }
+#ai-status.is-bad { color: var(--danger); }
