@@ -1449,6 +1449,336 @@
   Foodly.Fridge = Fridge;
 
   /* =======================================================================
+   * AI — рецепты из холодильника через Claude (ProxyAPI)
+   *   Ключ и настройки — в localStorage `foodly:v1:ai`, отдельно от данных: в бэкап не попадают,
+   *   «Сброс к демо» их не трогает. Запрос идёт из браузера напрямую в API (Anthropic Messages).
+   *   Нейросеть даёт только название, ингредиенты и шаги; КБЖУ, диеты и «есть / не хватает»
+   *   считает само приложение.
+   * ======================================================================= */
+  var AI = (function () {
+    var DEFAULT_URL = 'https://api.proxyapi.ru/anthropic/v1/messages';
+    var MODELS = [
+      { id: 'claude-opus-5', name: 'Claude Opus 5', note: 'лучшие рецепты, ≈ 30 ₽ за запрос' },
+      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', note: 'быстрее и дешевле, ≈ 12 ₽ за запрос' },
+      { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', note: 'самая дешёвая, рецепты проще, ≈ 6 ₽ за запрос' }
+    ];
+    var DEFAULTS = { key: '', model: MODELS[0].id, url: DEFAULT_URL, dailyLimit: 30, used: { date: '', count: 0 } };
+    var COUNT = 3;
+    var TIMEOUT = 120000;
+    var UNIT_ALIASES = { 'гр': 'г', 'грамм': 'г', 'граммов': 'г', 'g': 'г', 'шт.': 'шт', 'штука': 'шт', 'штуки': 'шт', 'штук': 'шт', 'зубчик': 'шт', 'зубчика': 'шт', 'зубчиков': 'шт',
+      'ст.л.': 'ст. л.', 'ст л': 'ст. л.', 'ст. ложка': 'ст. л.', 'столовая ложка': 'ст. л.', 'ч.л.': 'ч. л.', 'ч л': 'ч. л.', 'ч. ложка': 'ч. л.', 'чайная ложка': 'ч. л.',
+      'ml': 'мл', 'l': 'л', 'kg': 'кг', 'щепотки': 'щепотка' };
+
+    function cfg() {
+      var c = Storage.get('ai', null) || {};
+      var out = U.clone(DEFAULTS);
+      Object.keys(out).forEach(function (k) { if (c[k] != null) out[k] = c[k]; });
+      if (!MODELS.some(function (m) { return m.id === out.model; })) out.model = DEFAULTS.model;
+      if (!(Number(out.dailyLimit) >= 0)) out.dailyLimit = DEFAULTS.dailyLimit;
+      if (!out.url) out.url = DEFAULT_URL;
+      return out;
+    }
+    function save(patch) {
+      var c = cfg();
+      Object.keys(patch).forEach(function (k) { c[k] = patch[k]; });
+      return Storage.set('ai', c);
+    }
+    function hasKey() { return !!cfg().key; }
+    function usedToday() { var u = cfg().used || {}; return u.date === U.todayISO() ? u.count || 0 : 0; }
+    function bumpUsage() { save({ used: { date: U.todayISO(), count: usedToday() + 1 } }); }
+    function maskKey(k) { return k ? (k.length > 10 ? k.slice(0, 4) + '…' + k.slice(-4) : '••••') : ''; }
+
+    /* ---------- запрос к API ---------- */
+    function aiError(kind, message) { var e = new Error(message); e.kind = kind; return e; }
+    function post(body, c) {
+      var headers = { 'content-type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': c.key };
+      if (/(^|\.)anthropic\.com$/.test(hostOf(c.url))) headers['anthropic-dangerous-direct-browser-access'] = 'true';
+      var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, TIMEOUT) : null;
+      return fetch(c.url, { method: 'POST', headers: headers, body: JSON.stringify(body), signal: ctrl ? ctrl.signal : undefined })
+        .catch(function (err) {
+          if (err && err.name === 'AbortError') throw aiError('timeout', 'Нейросеть не ответила за ' + Math.round(TIMEOUT / 1000) + ' секунд. Попробуйте ещё раз.');
+          throw aiError('network', navigator.onLine === false ? 'Нет подключения к интернету.' : 'Не удалось связаться с сервером нейросети. Проверьте интернет и адрес API в «Настройках».');
+        })
+        .then(function (res) {
+          if (timer) clearTimeout(timer);
+          return res.text().then(function (text) {
+            var data = null; try { data = JSON.parse(text); } catch (e) { /* не JSON */ }
+            if (res.ok && data) return data;
+            var msg = (data && data.error && (data.error.message || data.error.type)) || (data && data.detail) || text.slice(0, 200) || ('HTTP ' + res.status);
+            if (res.status === 401 || res.status === 403) throw aiError('auth', 'Ключ не подошёл (' + res.status + '). Проверьте его в «Настройках → ИИ‑помощник».');
+            if (res.status === 402) throw aiError('balance', 'На балансе ProxyAPI закончились деньги.');
+            if (res.status === 429) throw aiError('rate', 'Слишком много запросов. Подождите минуту и попробуйте снова.');
+            var e = aiError(res.status >= 500 ? 'server' : 'bad', 'Сервер нейросети ответил ошибкой ' + res.status + ': ' + msg);
+            e.status = res.status; e.detail = String(msg);
+            throw e;
+          });
+        });
+    }
+    function hostOf(url) { try { return new URL(url).hostname; } catch (e) { return ''; } }
+    function textOf(resp) {
+      if (resp.stop_reason === 'refusal') throw aiError('refusal', 'Нейросеть отказалась отвечать на этот запрос. Попробуйте ещё раз или измените продукты.');
+      var t = (resp.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('');
+      if (!t) throw aiError('empty', resp.stop_reason === 'max_tokens' ? 'Ответ нейросети оборвался. Попробуйте ещё раз.' : 'Нейросеть вернула пустой ответ.');
+      return t;
+    }
+    function parseJSON(text) {
+      try { return JSON.parse(text); } catch (e) { /* может быть обёрнут в ```json */ }
+      var a = text.indexOf('{'), b = text.lastIndexOf('}');
+      if (a >= 0 && b > a) { try { return JSON.parse(text.slice(a, b + 1)); } catch (e) { /* ниже */ } }
+      throw aiError('format', 'Не удалось разобрать ответ нейросети. Попробуйте ещё раз.');
+    }
+    /* Строгая схема ответа (structured outputs). Если прокси её не принимает — повторяем без неё,
+       формат тогда задаёт системный промпт, а normalize() всё равно проверяет каждое поле. */
+    var SCHEMA = {
+      type: 'object', additionalProperties: false, required: ['recipes'],
+      properties: { recipes: { type: 'array', items: {
+        type: 'object', additionalProperties: false,
+        required: ['title', 'meals', 'servings', 'minutes', 'why', 'ingredients', 'steps'],
+        properties: {
+          title: { type: 'string' },
+          meals: { type: 'array', items: { type: 'string', enum: ['breakfast', 'lunch', 'dinner', 'snack'] } },
+          servings: { type: 'integer' },
+          minutes: { type: 'integer' },
+          why: { type: 'string' },
+          ingredients: { type: 'array', items: {
+            type: 'object', additionalProperties: false, required: ['productId', 'name', 'amount', 'unit'],
+            properties: { productId: { type: ['string', 'null'] }, name: { type: 'string' }, amount: { type: 'number' }, unit: { type: 'string', enum: Models.UNITS } } } },
+          steps: { type: 'array', items: { type: 'string' } }
+        } } } }
+    };
+    function call(system, user, c, maxTokens) {
+      var body = { model: c.model, max_tokens: maxTokens || 8000, system: system, messages: [{ role: 'user', content: user }] };
+      var full = U.clone(body);
+      full.output_config = { format: { type: 'json_schema', schema: SCHEMA } };
+      if (!/haiku-4/.test(c.model)) full.output_config.effort = 'low';
+      return post(full, c).catch(function (err) {
+        // прокси или модель не знают output_config — повторяем простым запросом
+        if (err.kind === 'bad' && err.status === 400 && /output_config|effort|format|schema|json/i.test(err.detail || '')) return post(body, c);
+        throw err;
+      });
+    }
+
+    /* ---------- что отправляем ---------- */
+    function catName(id) { var c = (DB.state.settings.categories || []).filter(function (x) { return x.id === id; })[0]; return c ? c.name : id; }
+    function dietText(d) {
+      var parts = [];
+      if ((d.categories || []).length) parts.push('нельзя категории: ' + d.categories.map(catName).join(', '));
+      if ((d.products || []).length) parts.push('нельзя продукты: ' + d.products.map(function (id) { var p = DB.product(id); return p ? p.name + ' (' + id + ')' : id; }).join(', '));
+      if ((d.allow || []).length) parts.push('но можно: ' + d.allow.map(function (id) { var p = DB.product(id); return p ? p.name + ' (' + id + ')' : id; }).join(', '));
+      if (d.maxCarbs != null && d.maxCarbs !== '') parts.push('углеводов не больше ' + d.maxCarbs + ' г на порцию');
+      if (d.maxCarbsPct != null && d.maxCarbsPct !== '') parts.push('углеводы не больше ' + d.maxCarbsPct + '% калорий порции');
+      if (d.minFatPct != null && d.minFatPct !== '') parts.push('жиры не меньше ' + d.minFatPct + '% калорий порции');
+      return d.name + (parts.length ? ': ' + parts.join('; ') : '');
+    }
+    function context(opts) {
+      opts = opts || {};
+      var s = DB.state.settings, rs = s.restrictions;
+      var fridge = Fridge.all().map(function (x) {
+        var p = DB.product(x.productId); if (!p) return null;
+        var d = Fridge.daysLeft(x.expires);
+        return '- ' + p.name + ' (' + p.id + '): ' + Fridge.qtyLabel(x) + (d == null ? '' : d < 0 ? ', просрочено' : d <= 2 ? ', испортится через ' + d + ' дн. — использовать в первую очередь' : '');
+      }).filter(Boolean);
+      var pt = s.pantry || { categories: [], products: [] };
+      var pantry = pt.products.map(function (id) { var p = DB.product(id); return p ? p.name + ' (' + id + ')' : null; }).filter(Boolean)
+        .concat(pt.categories.map(function (c) { return 'вся категория «' + catName(c) + '»'; }));
+      var diets = opts.respect ? (rs.diets || []).map(Diets.get).filter(Boolean) : [];
+      var excluded = opts.respect ? (rs.excluded || []).map(function (id) { var p = DB.product(id); return p ? p.name + ' (' + id + ')' : null; }).filter(Boolean) : [];
+      var byCat = {};
+      DB.state.products.forEach(function (p) { (byCat[p.category] = byCat[p.category] || []).push(p.id + ' — ' + p.name); });
+      var catalog = Object.keys(byCat).map(function (c) { return catName(c) + ':\n' + byCat[c].join('\n'); }).join('\n\n');
+      var meal = opts.meal ? Models.mealName(opts.meal) : null;
+      var lines = [
+        'Придумай ' + COUNT + ' разных рецепта' + (meal ? ' для приёма пищи «' + meal + '» (meals должен содержать «' + opts.meal + '»)' : '') + ' из того, что есть дома.',
+        '', 'В холодильнике:', fridge.join('\n') || '(пусто)',
+        '', 'Всегда есть дома (можно использовать без ограничений): ' + (pantry.join(', ') || 'ничего'),
+        '', 'Диеты, которые нужно соблюдать: ' + (diets.length ? '\n' + diets.map(function (d) { return '- ' + dietText(d); }).join('\n') : 'нет'),
+        'Исключённые продукты (не использовать): ' + (excluded.join(', ') || 'нет'),
+        '', 'Уже есть в книге рецептов (не повторяй): ' + Recipes.all().map(function (r) { return r.title; }).join('; '),
+        '', 'Справочник продуктов (id — название), используй эти id в productId:', catalog
+      ];
+      return lines.join('\n');
+    }
+    var SYSTEM = [
+      'Ты — помощник приложения Foodly! для домашней кухни. Пишешь по-русски, простыми словами.',
+      'Задача: придумать реальные, вкусные и выполнимые дома рецепты, в которых как можно больше продуктов из холодильника пользователя. Продукты, которые скоро испортятся, используй в первую очередь.',
+      'Правила:',
+      '- В каждом рецепте должен быть хотя бы один продукт из холодильника. Докупать можно не больше 2–3 продуктов, лучше ни одного.',
+      '- Строго соблюдай диеты и исключённые продукты. Для кето держи углеводы очень низкими, а жиры высокими.',
+      '- Для каждого ингредиента укажи productId из справочника, если продукт там есть (точный id). Если подходящего нет — productId: null и понятное название в name.',
+      '- name — название продукта как в справочнике. amount — число на весь рецепт, unit — одна из единиц: ' + Models.UNITS.join(', ') + '. Для «по вкусу» amount = 0.',
+      '- servings — на сколько порций рецепт (1–8), minutes — общее время готовки в минутах.',
+      '- steps — 3–8 коротких понятных шагов с временем и температурой, где нужно.',
+      '- why — одно короткое предложение, почему этот рецепт подходит (какие продукты из холодильника он использует).',
+      '- Не повторяй рецепты, которые уже есть в книге.',
+      'Ответ — только JSON без пояснений: {"recipes":[{"title":"","meals":["breakfast"|"lunch"|"dinner"|"snack"],"servings":2,"minutes":30,"why":"","ingredients":[{"productId":"egg","name":"Яйца","amount":2,"unit":"шт"}],"steps":[""]}]}'
+    ].join('\n');
+
+    /* ---------- проверка ответа ---------- */
+    function normUnit(u) {
+      var s = String(u || '').trim().toLowerCase();
+      if (Models.UNITS.indexOf(s) >= 0) return s;
+      if (UNIT_ALIASES[s]) return UNIT_ALIASES[s];
+      return null;
+    }
+    function normIngredient(x) {
+      if (!x || typeof x !== 'object') return null;
+      var name = String(x.name || '').trim().slice(0, 80);
+      var p = (x.productId && DB.product(String(x.productId))) || (name && DB.findProductByName(name)) || null;
+      if (!p && !name) return null;
+      var unit = normUnit(x.unit);
+      var amount = Number(x.amount);
+      if (!unit) { unit = 'по вкусу'; amount = 0; }
+      if (unit === 'по вкусу') amount = 0;
+      else if (!(amount > 0)) { unit = unit === 'щепотка' ? 'щепотка' : 'по вкусу'; amount = unit === 'щепотка' ? 1 : 0; }
+      var ing = { productId: p ? p.id : null, amount: U.round(amount, 2), unit: unit };
+      if (!p) ing.name = name;
+      return ing;
+    }
+    function normalize(data, opts) {
+      opts = opts || {};
+      var list = data && Array.isArray(data.recipes) ? data.recipes : [];
+      var rs = DB.state.settings.restrictions;
+      var diets = opts.respect ? rs.diets || [] : [], excluded = opts.respect ? rs.excluded || [] : [];
+      var out = [], hidden = 0;
+      list.forEach(function (x) {
+        if (!x || !x.title) return;
+        var ings = (Array.isArray(x.ingredients) ? x.ingredients : []).map(normIngredient).filter(Boolean);
+        var steps = (Array.isArray(x.steps) ? x.steps : []).map(function (s) { return String(s || '').trim(); }).filter(Boolean);
+        if (!ings.length || !steps.length) return;
+        var meals = (Array.isArray(x.meals) ? x.meals : []).filter(function (m) { return Models.MEALS.some(function (y) { return y.id === m; }); });
+        if (!meals.length) meals = opts.meal ? [opts.meal] : ['lunch'];
+        var r = {
+          id: U.uid('r'), title: String(x.title).trim().slice(0, 120), photo: null, photoId: null, photoUrl: null, photoCredit: null,
+          servings: Math.min(12, Math.max(1, Math.round(Number(x.servings) || 2))), meals: meals, cuisine: '', tags: ['ИИ'],
+          ingredients: ings, steps: steps.slice(0, 15), draft: false, source: 'ai',
+          aiWhy: String(x.why || '').trim().slice(0, 240), aiMinutes: Number(x.minutes) > 0 ? Math.round(Number(x.minutes)) : null
+        };
+        if (opts.meal && meals.indexOf(opts.meal) < 0) r.meals.unshift(opts.meal);
+        // нейросеть могла ошибиться — диеты и исключения проверяем сами
+        if ((diets.length && !Diets.fitsAll(r, diets)) || Recipes.containsProduct(r, excluded)) { hidden++; return; }
+        out.push(r);
+      });
+      return { recipes: out, hidden: hidden };
+    }
+
+    /* opts: {meal, respect} → Promise<{recipes, hidden, usage}> */
+    function recipes(opts) {
+      var c = cfg();
+      if (!c.key) return Promise.reject(aiError('nokey', 'Добавьте ключ ProxyAPI в «Настройках → ИИ‑помощник».'));
+      if (c.dailyLimit > 0 && usedToday() >= c.dailyLimit) return Promise.reject(aiError('limit', 'На сегодня запросы закончились (' + c.dailyLimit + ' в день). Лимит можно поменять в «Настройках».'));
+      bumpUsage();
+      return call(SYSTEM, context(opts), c).then(function (resp) {
+        var res = normalize(parseJSON(textOf(resp)), opts);
+        res.usage = resp.usage || null;
+        if (!res.recipes.length && !res.hidden) throw aiError('format', 'Нейросеть не прислала ни одного рецепта. Попробуйте ещё раз.');
+        return res;
+      });
+    }
+    /* «Проверить ключ»: самый короткий запрос к самой дешёвой модели */
+    function test() {
+      var c = cfg();
+      if (!c.key) return Promise.reject(aiError('nokey', 'Сначала введите ключ.'));
+      return post({ model: 'claude-haiku-4-5', max_tokens: 5, messages: [{ role: 'user', content: 'Ответь одним словом: ок' }] }, c).then(function () { return true; });
+    }
+    /* «Сохранить в рецепты»: если все продукты из справочника — готовый рецепт, иначе черновик */
+    function saveRecipe(r) {
+      var copy = U.clone(r);
+      copy.draft = copy.ingredients.some(function (i) { return !i.productId; });
+      copy.createdAt = Date.now();
+      Recipes.upsert(copy);
+      return copy;
+    }
+    /* «Докупить недостающее» для ИИ-рецепта: недостающее из справочника + продукты, которых нет в справочнике (по названию) */
+    function buyMissing(r) {
+      var n = Fridge.buyMissing(r);
+      var ref = { type: 'recipe', id: r.id, title: r.title, portions: r.servings };
+      r.ingredients.forEach(function (i) {
+        if (i.productId || !i.name) return;
+        Shopping.addItem(DB.state.shopping, { name: i.name, amount: i.unit === 'по вкусу' ? 0 : i.amount, unit: i.unit, source: 'fridge' }, ref);
+        n++;
+      });
+      return n;
+    }
+    /* ---------- ключ в резервной копии ----------
+       Ключ (с моделью, адресом и лимитом) шифруется паролем прямо в браузере: PBKDF2‑SHA‑256 → AES‑GCM‑256.
+       В файл копии попадает только зашифрованный блок, без пароля его не прочитать. */
+    var KDF_ITER = 310000;
+    function canEncrypt() { return !!(global.crypto && crypto.subtle && global.TextEncoder); }
+    function toB64(buf) { var b = new Uint8Array(buf), s = ''; for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s); }
+    function fromB64(str) { var s = atob(str), b = new Uint8Array(s.length); for (var i = 0; i < s.length; i++) b[i] = s.charCodeAt(i); return b; }
+    function deriveKey(password, salt, iter) {
+      return crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']).then(function (base) {
+        return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: salt, iterations: iter, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      });
+    }
+    function encryptSecret(password) {
+      var c = cfg();
+      var salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+      var plain = new TextEncoder().encode(JSON.stringify({ key: c.key, model: c.model, url: c.url, dailyLimit: c.dailyLimit }));
+      return deriveKey(password, salt, KDF_ITER).then(function (k) { return crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, k, plain); })
+        .then(function (ct) { return { v: 1, kdf: 'PBKDF2-SHA256', iter: KDF_ITER, cipher: 'AES-GCM', salt: toB64(salt), iv: toB64(iv), data: toB64(ct) }; });
+    }
+    function isSecret(x) { return !!(x && typeof x === 'object' && x.v === 1 && typeof x.salt === 'string' && typeof x.iv === 'string' && typeof x.data === 'string'); }
+    /* → Promise<{key, model, url, dailyLimit}>; неверный пароль → ошибка kind 'password' */
+    function decryptSecret(sec, password) {
+      if (!canEncrypt()) return Promise.reject(aiError('crypto', 'Этот браузер не умеет расшифровывать ключ.'));
+      return Promise.resolve().then(function () {
+        var iter = Math.min(5000000, Math.max(1000, Number(sec.iter) || KDF_ITER));
+        return deriveKey(password, fromB64(sec.salt), iter).then(function (k) { return crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(sec.iv) }, k, fromB64(sec.data)); });
+      }).then(function (pt) {
+        var o = JSON.parse(new TextDecoder().decode(pt));
+        if (!o || typeof o.key !== 'string' || !o.key) throw new Error('empty');
+        return { key: o.key, model: o.model, url: typeof o.url === 'string' && /^https:\/\//i.test(o.url) ? o.url : DEFAULT_URL, dailyLimit: Number(o.dailyLimit) >= 0 ? Number(o.dailyLimit) : DEFAULTS.dailyLimit };
+      }).catch(function () { throw aiError('password', 'Неверный пароль.'); });
+    }
+    /* Окно ввода пароля. o: {title, text, confirm (повтор пароля), okText, skipText, check(pw) → Promise<true | текст ошибки>}
+       → Promise<пароль | null> */
+    function passwordPrompt(o) {
+      return new Promise(function (resolve) {
+        var content = h('<form class="pw-form" novalidate><p class="muted"></p>' +
+          '<div class="field"><label for="pw-1">Пароль</label><input id="pw-1" type="password" autocomplete="' + (o.confirm ? 'new-password' : 'current-password') + '" autofocus></div>' +
+          (o.confirm ? '<div class="field"><label for="pw-2">Пароль ещё раз</label><input id="pw-2" type="password" autocomplete="new-password"></div>' : '') +
+          '<p class="muted small">' + (o.confirm ? 'Не меньше 6 символов. Пароль нигде не сохраняется — без него ключ из копии не восстановить.' : '') + '</p></form>');
+        $('p.muted', content).textContent = o.text || '';
+        var foot = h('<div class="btn-row"><button type="button" class="btn btn-ghost" data-v="0"></button><button type="button" class="btn btn-primary" data-v="1"></button></div>');
+        foot.children[0].textContent = o.skipText || 'Отмена';
+        foot.children[1].textContent = o.okText || 'Готово';
+        var result = null, busy = false;
+        var m = UI.modal({ title: o.title, content: content, footer: foot, size: 'sm', onClose: function () { resolve(result); } });
+        var p1 = $('#pw-1', content), p2 = $('#pw-2', content);
+        function submit() {
+          if (busy) return;
+          var pw = p1.value;
+          if (o.confirm) {
+            if (pw.length < 6) { UI.fieldError(p1, 'Не меньше 6 символов'); p1.focus(); return; }
+            UI.fieldError(p1, null);
+            if (p2.value !== pw) { UI.fieldError(p2, 'Пароли не совпадают'); p2.focus(); return; }
+            UI.fieldError(p2, null);
+          } else if (!pw) { UI.fieldError(p1, 'Введите пароль'); p1.focus(); return; }
+          if (!o.check) { result = pw; m.close(); return; }
+          busy = true; foot.children[1].disabled = true;
+          o.check(pw).then(function (res) {
+            busy = false; foot.children[1].disabled = false;
+            if (res === true) { result = pw; m.close(); return; }
+            UI.fieldError(p1, String(res)); p1.select(); p1.focus();
+          });
+        }
+        content.addEventListener('submit', function (e) { e.preventDefault(); submit(); });
+        [p1, p2].forEach(function (inp) { if (inp) inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } }); });
+        foot.addEventListener('click', function (e) {
+          var b = e.target.closest('[data-v]'); if (!b) return;
+          if (b.dataset.v === '1') submit(); else m.close();
+        });
+      });
+    }
+    return { MODELS: MODELS, DEFAULT_URL: DEFAULT_URL, cfg: cfg, save: save, hasKey: hasKey, usedToday: usedToday, maskKey: maskKey,
+      context: context, normalize: normalize, recipes: recipes, test: test, saveRecipe: saveRecipe, buyMissing: buyMissing, SYSTEM: SYSTEM,
+      canEncrypt: canEncrypt, encryptSecret: encryptSecret, decryptSecret: decryptSecret, isSecret: isSecret, passwordPrompt: passwordPrompt };
+  })();
+  Foodly.AI = AI;
+
+  /* =======================================================================
    * Planner — детерминированный подбор плана питания на 7 дней
    * ======================================================================= */
   var Planner = (function () {
@@ -2083,8 +2413,10 @@
    * ======================================================================= */
   var Backup = (function () {
     /* Экспорт: все данные + фото из IndexedDB (как data: URL, только те, на которые ссылаются рецепты) */
-    function exportJSON() {
+    /* opts.ai — зашифрованный ключ ИИ‑помощника (AI.encryptSecret), кладётся в копию отдельным полем */
+    function exportJSON(opts) {
       var data = DB.exportData();
+      if (opts && opts.ai) data.ai = opts.ai;
       var ref = {};
       DB.state.recipes.forEach(function (r) { if (r.photoId) ref[r.photoId] = true; });
       var photosP = PhotoStore.isAvailable() ? PhotoStore.all() : Promise.resolve([]);
@@ -2135,7 +2467,7 @@
       });
       if (errs.length) return { ok: false, error: 'Файл повреждён: ' + errs.slice(0, 3).join('; ') + (errs.length > 3 ? ' и ещё ' + (errs.length - 3) : '') + '.' };
       var data = Storage.migrate(U.clone(d), v);
-      return { ok: true, data: data, counts: { recipes: (data.recipes || []).length, products: (data.products || []).length, shopping: (data.shopping || []).length, fridge: (data.fridge || []).length,
+      return { ok: true, data: data, ai: AI.isSecret(obj.ai) ? obj.ai : null, counts: { recipes: (data.recipes || []).length, products: (data.products || []).length, shopping: (data.shopping || []).length, fridge: (data.fridge || []).length,
         photos: (data.photos || []).length + (data.recipes || []).filter(function (r) { return typeof r.photo === 'string' && r.photo.indexOf('data:') === 0; }).length } };
     }
     function mergeById(cur, inc, preferIncoming) {
@@ -3744,6 +4076,7 @@
   var FridgeView = (function () {
     var root = null;
     var st = { meal: '', respect: true, limit: 12 };
+    var ai = { busy: false, list: null, hidden: 0, error: null, saved: {} };   // идеи от ИИ живут до перезагрузки страницы
     var FR_UNITS = ['г', 'кг', 'мл', 'л', 'шт'];
 
     function expiryHtml(item) {
@@ -3787,6 +4120,8 @@
         '<button type="button" class="chip" data-meal="">Все</button>' +
         Models.MEALS.map(function (m) { return '<button type="button" class="chip m-' + m.id + '" data-meal="' + m.id + '">' + m.emoji + ' ' + m.name + '</button>'; }).join('') + '</div>' +
         restrictionsSwitch() +
+        '<div class="fr-ai"><button type="button" class="btn btn-primary btn-block fr-ai-go" data-ai="go">✨ Придумать с ИИ</button>' +
+        '<p class="muted small fr-ai-note" id="fr-ai-note"></p><div id="fr-ai-out"></div></div>' +
         '<p class="muted small" id="fr-match-count" aria-live="polite"></p><ul class="fr-matches" id="fr-matches"></ul></section>' +
         '</div></section>');
 
@@ -3898,6 +4233,31 @@
           if (DB.save('shopping')) UI.toast('В список покупок: ' + n + ' ' + U.plural(n, 'продукт', 'продукта', 'продуктов') + ' для «' + r.title + '»', { actionLabel: 'Открыть список', onAction: function () { location.hash = '#shopping'; } });
         }
       });
+      /* ---------- идеи от ИИ ---------- */
+      $('[data-ai="go"]', root).addEventListener('click', askAI);
+      $('#fr-ai-note', root).addEventListener('click', function (e) {
+        if (e.target.closest('[data-ai="settings"]')) { e.preventDefault(); SettingsView.focusAI(); }
+      });
+      $('#fr-ai-out', root).addEventListener('click', function (e) {
+        var b = e.target.closest('[data-air]'); if (!b) return;
+        if (b.dataset.air === 'hide') { ai.list = null; ai.error = null; renderAI(); $('[data-ai="go"]', root).focus(); return; }
+        if (b.dataset.air === 'retry') { askAI(); return; }
+        var li = b.closest('[data-aiid]'); if (!li) return;
+        var r = (ai.list || []).filter(function (x) { return x.id === li.dataset.aiid; })[0]; if (!r) return;
+        if (b.dataset.air === 'save') {
+          var saved = AI.saveRecipe(r);
+          ai.saved[r.id] = saved.id;
+          renderAI();
+          var openBtn = $('[data-aiid="' + r.id + '"] [data-air="open"]', root); if (openBtn) openBtn.focus();
+          UI.toast(saved.draft ? '«' + r.title + '» сохранён как черновик: для некоторых ингредиентов нужно выбрать продукт из справочника' : '«' + r.title + '» добавлен в рецепты',
+            { actionLabel: 'Открыть', onAction: function () { RecipesView.openRecipe(saved.id); } });
+        }
+        if (b.dataset.air === 'open') RecipesView.openRecipe(ai.saved[r.id]);
+        if (b.dataset.air === 'buy') {
+          var n = AI.buyMissing(r);
+          if (DB.save('shopping')) UI.toast('В список покупок: ' + n + ' ' + U.plural(n, 'продукт', 'продукта', 'продуктов') + ' для «' + r.title + '»', { actionLabel: 'Открыть список', onAction: function () { location.hash = '#shopping'; } });
+        }
+      });
       $('.fr-jump', root).addEventListener('click', function (e) {
         e.preventDefault(); var t = $('#h-fr-match', root);
         t.scrollIntoView({ behavior: global.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
@@ -3908,6 +4268,75 @@
       });
       update();
       return root;
+    }
+
+    function askAI() {
+      if (ai.busy) return;
+      if (!AI.hasKey()) {
+        UI.confirm({ title: 'Нужен ключ ProxyAPI', text: 'Чтобы нейросеть придумывала рецепты, добавьте свой ключ ProxyAPI в «Настройках». Он хранится только в этом браузере.', okText: 'Открыть настройки' })
+          .then(function (yes) { if (yes) SettingsView.focusAI(); });
+        return;
+      }
+      if (!Fridge.all().length) { UI.toast('Сначала добавьте продукты в холодильник'); $('#fr-name', root).focus(); return; }
+      ai.busy = true; ai.error = null;
+      renderAI();
+      AI.recipes({ meal: st.meal, respect: st.respect && !!$('#fr-respect', root) }).then(function (res) {
+        ai.list = res.recipes; ai.hidden = res.hidden;
+      }).catch(function (err) {
+        ai.error = { msg: (err && err.message) || String(err), kind: err && err.kind };
+      }).then(function () {
+        ai.busy = false;
+        if (!root || !root.isConnected) return;
+        renderAI();
+        var head = $('#h-fr-ai', root) || $('.fr-ai-error', root); if (head) { head.setAttribute('tabindex', '-1'); head.focus(); }
+      });
+    }
+    function ingLine(i) {
+      var p = i.productId ? DB.product(i.productId) : null;
+      var name = p ? p.name : i.name;
+      var inFridge = p && (Fridge.byProduct(p.id) || Fridge.isPantry(p.id));
+      return '<li' + (inFridge ? ' class="is-have"' : '') + '>' + U.esc(name) + ' — ' + U.esc(i.unit === 'по вкусу' ? 'по вкусу' : U.fmt(i.amount, 2) + ' ' + i.unit) +
+        (!p ? ' <span class="muted">(нет в справочнике)</span>' : '') + '</li>';
+    }
+    function renderAI() {
+      if (!root) return;
+      var c = AI.cfg(), go = $('[data-ai="go"]', root), note = $('#fr-ai-note', root), out = $('#fr-ai-out', root);
+      var model = AI.MODELS.filter(function (m) { return m.id === c.model; })[0];
+      go.disabled = ai.busy;
+      go.textContent = ai.busy ? 'Придумываю рецепты…' : (ai.list ? '✨ Придумать ещё' : '✨ Придумать с ИИ');
+      note.innerHTML = AI.hasKey()
+        ? 'Нейросеть ' + U.esc(model ? model.name : c.model) + ' придумает 3 рецепта из ваших продуктов' + (st.meal ? ' на «' + U.esc(Models.mealName(st.meal).toLowerCase()) + '»' : '') + '. Сегодня запросов: ' + AI.usedToday() + (c.dailyLimit > 0 ? ' из ' + c.dailyLimit : '') + '.'
+        : 'Нужен ключ ProxyAPI — <a href="#settings" data-ai="settings">добавьте его в настройках</a>.';
+      if (ai.busy) { out.innerHTML = '<p class="fr-ai-status" role="status"><span class="fr-ai-spin" aria-hidden="true"></span>Нейросеть думает, это может занять до минуты…</p>'; return; }
+      if (ai.error) {
+        out.innerHTML = '<div class="fr-ai-error" role="alert"><p>' + U.esc(ai.error.msg) + '</p>' +
+          (ai.error.kind === 'auth' || ai.error.kind === 'balance' ? '<a href="#settings" class="btn btn-secondary btn-sm" data-ai="settings">Открыть настройки</a>' :
+            ai.error.kind === 'limit' || ai.error.kind === 'nokey' ? '' : '<button type="button" class="btn btn-secondary btn-sm" data-air="retry">Попробовать ещё раз</button>') + '</div>';
+        var link = $('[data-ai="settings"]', out); if (link) link.addEventListener('click', function (e) { e.preventDefault(); SettingsView.focusAI(); });
+        return;
+      }
+      if (!ai.list) { out.innerHTML = ''; return; }
+      out.innerHTML = '<div class="fr-ai-head"><h3 id="h-fr-ai" class="fr-ai-title">✨ Идеи от нейросети</h3><button type="button" class="btn btn-ghost btn-sm" data-air="hide">Скрыть</button></div>' +
+        (ai.list.length ? '' : '<p class="muted small">Все придуманные рецепты нарушали выбранные диеты или исключения, поэтому скрыты. Попробуйте ещё раз.</p>') +
+        '<ul class="fr-matches fr-ai-list">' + ai.list.map(function (r) {
+          var m = Fridge.match(r), ps = Nutrition.perServing(r);
+          var unknown = r.ingredients.filter(function (i) { return !i.productId; }).map(function (i) { return i.name; });
+          var missNames = m.missing.map(function (y) { return y.name; }).concat(unknown);
+          var savedId = ai.saved[r.id] && DB.recipe(ai.saved[r.id]) ? ai.saved[r.id] : null;
+          return '<li class="fr-match fr-ai-card' + (missNames.length ? '' : ' is-full') + '" data-aiid="' + U.esc(r.id) + '">' +
+            UI.mediaHtml(r, 'fr-media') +
+            '<div class="fr-match-body"><h4 class="fr-match-title">' + U.esc(r.title) + '</h4>' +
+            (r.aiWhy ? '<p class="small fr-ai-why">' + U.esc(r.aiWhy) + '</p>' : '') +
+            '<p class="muted small">' + (ps.issues.length ? '≈ ' : '') + U.fmt(ps.kcal) + ' ккал на порцию · ' + r.servings + ' ' + U.plural(r.servings, 'порция', 'порции', 'порций') +
+            (r.aiMinutes ? ' · ' + r.aiMinutes + ' мин' : '') + ' · из холодильника ' + m.have.length + ' из ' + (m.total + unknown.length) + '</p>' +
+            (missNames.length ? '<p class="fr-status fr-status-miss"><strong>Не хватает:</strong> ' + missNames.map(function (n) { return '<span class="fr-miss">' + U.esc(n) + '</span>'; }).join(', ') + '</p>' : '<p class="fr-status fr-status-ok">Есть всё 🎉</p>') +
+            '<details class="fr-ai-more"><summary>Ингредиенты и шаги</summary><ul class="fr-ai-ings small">' + r.ingredients.map(ingLine).join('') + '</ul>' +
+            '<ol class="fr-ai-steps small">' + r.steps.map(function (x) { return '<li>' + U.esc(x) + '</li>'; }).join('') + '</ol></details>' +
+            '<div class="btn-row">' + (savedId ? '<button type="button" class="btn btn-secondary btn-sm" data-air="open">Открыть рецепт</button>' : '<button type="button" class="btn btn-secondary btn-sm" data-air="save">Сохранить в рецепты</button>') +
+            (missNames.length ? '<button type="button" class="btn btn-primary btn-sm" data-air="buy">Докупить недостающее</button>' : '') + '</div></div></li>';
+        }).join('') + '</ul>' +
+        (ai.hidden ? '<p class="muted small">Ещё ' + ai.hidden + ' ' + U.plural(ai.hidden, 'рецепт не подошёл под выбранные диеты и скрыт', 'рецепта не подошли под выбранные диеты и скрыты', 'рецептов не подошли под выбранные диеты и скрыты') + '.</p>' : '') +
+        '<p class="muted small">Рецепты придуманы нейросетью — проверьте их перед готовкой. Калории посчитаны по справочнику Foodly!.</p>';
     }
 
     function renderPantry(keepFocus) {
@@ -3958,6 +4387,7 @@
 
     function updateMatches() {
       if (!root) return;
+      renderAI();
       $$('.fr-col-match .meal-chips .chip', root).forEach(function (c) { c.setAttribute('aria-pressed', String(c.dataset.meal === st.meal)); });
       var ul = $('#fr-matches', root), cnt = $('#fr-match-count', root);
       var more = $('.fr-col-match [data-more]', root); if (more) more.remove();
@@ -4420,6 +4850,7 @@
           return '<label class="accent-opt" style="--sw:' + a.sw + ';--sw-2:' + a.sw2 + '"><input type="radio" name="accent" value="' + a.id + '"' + (Theme.accent() === a.id ? ' checked' : '') + '>' +
             '<span class="accent-dot" aria-hidden="true"></span><span class="accent-name">' + a.name + '</span></label>';
         }).join('') + '</div></fieldset></section>' +
+        aiCardHtml() +
         '<section class="card" aria-labelledby="st-data"><h2 class="card-title" id="st-data">Данные и резервная копия</h2>' +
         '<p class="muted small">Всё хранится только в этом браузере. Сохраните JSON-копию, чтобы перенести данные на другое устройство.</p>' +
         '<div class="btn-col"><button type="button" class="btn btn-secondary" data-a="export">Экспорт данных (JSON)</button>' +
@@ -4440,9 +4871,22 @@
         inp.addEventListener('change', function () { if (inp.checked) Theme.setAccent(inp.value); });
       });
       $('[data-a="export"]', root).addEventListener('click', function (e) {
-        var btn = e.currentTarget; btn.disabled = true;
-        Backup.exportJSON().then(function (r) {
-          UI.toast('Резервная копия сохранена: ' + r.name + (r.photos ? ' (с фото: ' + r.photos + ', ' + U.fmt(r.bytes / 1024 / 1024, 1) + ' МБ)' : ''));
+        var btn = e.currentTarget;
+        // ключ ИИ‑помощника — только по желанию и только под паролем
+        var withKey = AI.hasKey() && AI.canEncrypt() ? UI.choose({ title: 'Экспорт данных', text: 'Добавить в копию ключ ИИ‑помощника? Тогда на другом устройстве его не придётся вводить заново.',
+          options: [{ value: 'key', label: 'С ключом под паролем', desc: 'Ключ зашифруется паролем; при импорте Foodly! спросит этот пароль', primary: true },
+            { value: 'plain', label: 'Без ключа', desc: 'Ключ останется только в этом браузере' }] }) : Promise.resolve('plain');
+        withKey.then(function (mode) {
+          if (!mode) return null;
+          if (mode === 'plain') return {};
+          return AI.passwordPrompt({ title: 'Пароль для ключа', text: 'Придумайте пароль: им зашифруется ключ ProxyAPI в файле копии.', confirm: true, okText: 'Экспортировать' })
+            .then(function (pw) { return pw ? AI.encryptSecret(pw).then(function (sec) { return { ai: sec }; }) : null; });
+        }).then(function (opts) {
+          if (!opts) return;
+          btn.disabled = true;
+          return Backup.exportJSON(opts).then(function (r) {
+            UI.toast('Резервная копия сохранена: ' + r.name + (r.photos ? ' (с фото: ' + r.photos + ', ' + U.fmt(r.bytes / 1024 / 1024, 1) + ' МБ)' : '') + (opts.ai ? '. Ключ ИИ — под паролем' : ''));
+          });
         }).catch(function (err) { UI.toast('Не удалось экспортировать: ' + (err && err.message || err), { type: 'error' }); })
           .then(function () { btn.disabled = false; });
       });
@@ -4456,12 +4900,23 @@
           try { obj = JSON.parse(reader.result); } catch (err) { UI.toast('Это не JSON-файл или он повреждён.', { type: 'error' }); return; }
           var v = Backup.validate(obj);
           if (!v.ok) { UI.toast(v.error, { type: 'error' }); return; }
-          UI.choose({ title: 'Импорт данных', text: 'В файле: рецептов — ' + v.counts.recipes + ', фото — ' + v.counts.photos + ', продуктов — ' + v.counts.products + ', позиций списка — ' + v.counts.shopping + ', в холодильнике — ' + v.counts.fridge + '.',
+          UI.choose({ title: 'Импорт данных', text: 'В файле: рецептов — ' + v.counts.recipes + ', фото — ' + v.counts.photos + ', продуктов — ' + v.counts.products + ', позиций списка — ' + v.counts.shopping + ', в холодильнике — ' + v.counts.fridge + (v.ai ? ', ключ ИИ‑помощника (под паролем)' : '') + '.',
             options: [{ value: 'merge', label: 'Объединить', desc: 'Добавить новое, совпадающие рецепты обновить по дате', primary: true },
               { value: 'replace', label: 'Заменить всё', desc: 'Текущие данные будут полностью заменены' }] }).then(function (mode) {
             if (!mode) return;
             Backup.importData(v.data, mode).then(function (ok) {
               if (!ok) return;
+              if (v.ai && AI.canEncrypt()) {
+                var restored = false;
+                return AI.passwordPrompt({ title: 'Ключ ИИ‑помощника', text: 'В копии есть ключ ProxyAPI под паролем. Введите пароль, чтобы восстановить его в этом браузере.' + (AI.hasKey() ? ' Текущий ключ будет заменён.' : ''),
+                  okText: 'Восстановить ключ', skipText: 'Пропустить',
+                  check: function (pw) { return AI.decryptSecret(v.ai, pw).then(function (c) { restored = AI.save(c); return true; }, function (err) { return err.message; }); } })
+                  .then(function () { return { ok: ok, key: restored }; });
+              }
+              return { ok: ok };
+            }).then(function (res) {
+              if (!res || !res.ok) return;
+              if (res.key) UI.toast('Ключ ИИ‑помощника восстановлен');
               Theme.apply(DB.state.settings.theme === 'dark' || DB.state.settings.theme === 'light' ? DB.state.settings.theme : Theme.current());
               if (DB.state.settings.theme) Storage.set('theme', DB.state.settings.theme);
               if (DB.state.settings.accent) { Storage.set('accent', DB.state.settings.accent); Theme.applyAccent(DB.state.settings.accent); }
@@ -4495,8 +4950,89 @@
       var mine = $('#prod-mine', root);
       mine.addEventListener('click', function () { prodOnlyMine = !prodOnlyMine; mine.setAttribute('aria-checked', String(prodOnlyMine)); prodLimit = 40; renderProducts(); });
       $('[data-a="new-prod"]', root).addEventListener('click', function () { openProduct(null); });
+      bindAI();
       renderProducts();
       return root;
+    }
+
+    /* ---------- ИИ‑помощник ---------- */
+    function aiCardHtml() {
+      var c = AI.cfg();
+      return '<section class="card ai-card" aria-labelledby="st-ai"><h2 class="card-title" id="st-ai">✨ ИИ‑помощник</h2>' +
+        '<p class="muted small">Придумывает рецепты из того, что лежит в холодильнике. Работает через <a href="https://proxyapi.ru" target="_blank" rel="noopener">ProxyAPI</a> — нужен ваш ключ оттуда.</p>' +
+        '<form id="ai-form" novalidate>' +
+        '<div class="field"><label for="ai-key">Ключ ProxyAPI</label><div class="ai-key-row"><input id="ai-key" type="password" autocomplete="off" spellcheck="false" placeholder="' + (c.key ? U.esc(AI.maskKey(c.key)) + ' — сохранён' : 'sk-…') + '" aria-describedby="ai-key-hint">' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-ai="show" aria-pressed="false">Показать</button></div>' +
+        '<p class="muted small" id="ai-key-hint">' + (c.key ? 'Ключ сохранён. Чтобы заменить, введите новый.' : 'Ключ хранится только в этом браузере. В резервную копию он попадает только по желанию и под паролем.') + '</p></div>' +
+        '<div class="field"><label for="ai-model">Модель</label><select id="ai-model">' + AI.MODELS.map(function (m) {
+          return '<option value="' + m.id + '"' + (m.id === c.model ? ' selected' : '') + '>' + U.esc(m.name + ' — ' + m.note) + '</option>';
+        }).join('') + '</select></div>' +
+        '<details class="ai-adv"><summary>Дополнительно</summary>' +
+        '<div class="field"><label for="ai-limit">Запросов в день, не больше</label><input id="ai-limit" type="number" min="0" max="500" step="1" inputmode="numeric" value="' + c.dailyLimit + '" aria-describedby="ai-limit-hint"><p class="muted small" id="ai-limit-hint">0 — без ограничения. Сегодня: ' + AI.usedToday() + '.</p></div>' +
+        '<div class="field"><label for="ai-url">Адрес API</label><input id="ai-url" type="url" spellcheck="false" value="' + U.esc(c.url) + '"></div>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-ai="url-reset">Вернуть адрес ProxyAPI</button></details>' +
+        '<div class="btn-row wrap"><button type="submit" class="btn btn-primary">Сохранить</button>' +
+        '<button type="button" class="btn btn-secondary" data-ai="test">Проверить ключ</button>' +
+        '<button type="button" class="btn btn-ghost btn-danger-text" data-ai="del"' + (c.key ? '' : ' hidden') + '>Удалить ключ</button></div>' +
+        '<p class="small" id="ai-status" role="status"></p></form>' +
+        '<p class="muted small">Для подбора в ProxyAPI и Anthropic отправляются продукты из холодильника, «всегда есть дома», выбранные диеты и названия ваших рецептов. Ключ может увидеть любой, у кого есть доступ к этому браузеру, — заведите для Foodly! отдельный ключ и держите на балансе небольшую сумму.</p></section>';
+    }
+    function bindAI() {
+      var form = $('#ai-form', root), keyIn = $('#ai-key', root), status = $('#ai-status', root);
+      function say(msg, bad) { status.textContent = msg; status.classList.toggle('is-bad', !!bad); }
+      function collect() {
+        var patch = { model: $('#ai-model', root).value };
+        var lim = parseInt($('#ai-limit', root).value, 10);
+        patch.dailyLimit = lim >= 0 ? Math.min(500, lim) : 30;
+        var url = $('#ai-url', root).value.trim();
+        if (url && !/^https:\/\//i.test(url)) { UI.fieldError($('#ai-url', root), 'Адрес должен начинаться с https://'); return null; }
+        UI.fieldError($('#ai-url', root), null);
+        patch.url = url || AI.DEFAULT_URL;
+        var k = keyIn.value.trim();
+        if (k) patch.key = k;
+        return patch;
+      }
+      function persist() {
+        var patch = collect(); if (!patch) return false;
+        if (!AI.save(patch)) return false;
+        if (patch.key) { keyIn.value = ''; keyIn.placeholder = AI.maskKey(patch.key) + ' — сохранён'; $('#ai-key-hint', root).textContent = 'Ключ сохранён. Чтобы заменить, введите новый.'; }
+        $('[data-ai="del"]', root).hidden = !AI.hasKey();
+        return true;
+      }
+      form.addEventListener('submit', function (e) { e.preventDefault(); if (persist()) say('Сохранено.'); });
+      $('#ai-model', root).addEventListener('change', function () { AI.save({ model: $('#ai-model', root).value }); say('Модель сохранена.'); });
+      $('[data-ai="show"]', root).addEventListener('click', function (e) {
+        var b = e.currentTarget, on = keyIn.type === 'password';
+        keyIn.type = on ? 'text' : 'password'; b.textContent = on ? 'Скрыть' : 'Показать'; b.setAttribute('aria-pressed', String(on));
+      });
+      $('[data-ai="url-reset"]', root).addEventListener('click', function () { $('#ai-url', root).value = AI.DEFAULT_URL; UI.fieldError($('#ai-url', root), null); });
+      $('[data-ai="test"]', root).addEventListener('click', function (e) {
+        var b = e.currentTarget;
+        if (!persist()) return;
+        if (!AI.hasKey()) { say('Сначала введите ключ.', true); keyIn.focus(); return; }
+        b.disabled = true; say('Проверяю…');
+        AI.test().then(function () { say('Ключ работает ✓'); })
+          .catch(function (err) { say((err && err.message) || String(err), true); })
+          .then(function () { b.disabled = false; });
+      });
+      $('[data-ai="del"]', root).addEventListener('click', function (e) {
+        UI.confirm({ title: 'Удалить ключ?', text: 'Ключ ProxyAPI будет удалён из этого браузера. ИИ‑помощник перестанет работать, пока вы не введёте ключ снова.', okText: 'Удалить', danger: true }).then(function (yes) {
+          if (!yes) return;
+          AI.save({ key: '' });
+          keyIn.value = ''; keyIn.placeholder = 'sk-…'; $('#ai-key-hint', root).textContent = 'Ключ хранится только в этом браузере. В резервную копию он попадает только по желанию и под паролем.';
+          $('[data-ai="del"]', root).hidden = true; say('Ключ удалён.'); keyIn.focus();
+        });
+      });
+    }
+    /* Открыть «Настройки» на карточке ИИ‑помощника (из холодильника) */
+    function focusAI() {
+      function go() {
+        var el = root && root.isConnected && $('#ai-key', root); if (!el) return;
+        var card = $('#st-ai', root);
+        card.scrollIntoView({ block: 'start', behavior: global.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+        el.focus({ preventScroll: true });
+      }
+      if (location.hash !== '#settings') { location.hash = '#settings'; setTimeout(go, 60); } else go();
     }
     function usage() {
       var box = $('#storage-usage', root);
@@ -4634,7 +5170,7 @@
       $('[data-a="save"]', foot).addEventListener('click', save);
       form.addEventListener('submit', function (e) { e.preventDefault(); save(); });
     }
-    return { render: render };
+    return { render: render, focusAI: focusAI };
   })();
 
   /* =======================================================================
